@@ -1,3 +1,4 @@
 psutil>=5.9.0
 tiktoken>=0.7.0
 PyGithub>=2.1.0
+textual>=0.52.0
