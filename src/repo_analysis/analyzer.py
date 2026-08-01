@@ -1,3 +1,24 @@
+# Repository Intelligence CLI Tool
+# Copyright (c) 2024 Repository Intelligence Team
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 import os
 import sys
 import json
@@ -11,6 +32,9 @@ import logging
 import multiprocessing
 import threading
 import datetime
+import uuid
+import base64
+import urllib.request
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Optional, Any
@@ -52,6 +76,265 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 logger = logging.getLogger(__name__)
+
+
+def setup_organized_logging(output_dir: str = "./outputs", verbose: bool = True) -> Dict[str, str]:
+    """
+    Sets up an organized logging infrastructure with unique log file naming across three distinct logging categories:
+      1. Verbose/Debug Log: Detailed internal metrics, file timings, git commands, rating breakdown.
+      2. Execution/Info Log: Pipeline milestones, progress, stage status.
+      3. Error/Warn Log: Warnings, failures, API limits, exceptions.
+      4. Log Tree Directory: Logs repository directory folder structures.
+
+    Organized Folder Structure:
+      <output_dir>/logs/
+        ├── verbose/
+        │   └── repo_analysis_verbose_YYYYMMDD_HHMMSS_<UUID8>.log
+        ├── execution/
+        │   └── repo_analysis_execution_YYYYMMDD_HHMMSS_<UUID8>.log
+        ├── errors/
+        │   └── repo_analysis_errors_YYYYMMDD_HHMMSS_<UUID8>.log
+        └── tree/
+            └── repo_analysis_tree_YYYYMMDD_HHMMSS_<UUID8>.log
+    """
+    logs_base = os.path.join(output_dir, "logs")
+    verbose_dir = os.path.join(logs_base, "verbose")
+    execution_dir = os.path.join(logs_base, "execution")
+    errors_dir = os.path.join(logs_base, "errors")
+    tree_dir = os.path.join(logs_base, "tree")
+
+    for d in [verbose_dir, execution_dir, errors_dir, tree_dir]:
+        os.makedirs(d, exist_ok=True)
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = uuid.uuid4().hex[:8]
+
+    verbose_log_file = os.path.join(verbose_dir, f"repo_analysis_verbose_{timestamp}_{run_id}.log")
+    execution_log_file = os.path.join(execution_dir, f"repo_analysis_execution_{timestamp}_{run_id}.log")
+    errors_log_file = os.path.join(errors_dir, f"repo_analysis_errors_{timestamp}_{run_id}.log")
+    tree_log_file = os.path.join(tree_dir, f"repo_analysis_tree_{timestamp}_{run_id}.log")
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+    for h in list(root_logger.handlers):
+        root_logger.removeHandler(h)
+
+    fmt_file = logging.Formatter(
+        "%(asctime)s [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    fmt_console = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S"
+    )
+
+    # Handler 1: Verbose (DEBUG level)
+    vh = logging.FileHandler(verbose_log_file, encoding="utf-8")
+    vh.setLevel(logging.DEBUG)
+    vh.setFormatter(fmt_file)
+    root_logger.addHandler(vh)
+
+    # Handler 2: Execution (INFO level)
+    eh = logging.FileHandler(execution_log_file, encoding="utf-8")
+    eh.setLevel(logging.INFO)
+    eh.setFormatter(fmt_file)
+    root_logger.addHandler(eh)
+
+    # Handler 3: Errors (WARNING/ERROR level)
+    errh = logging.FileHandler(errors_log_file, encoding="utf-8")
+    errh.setLevel(logging.WARNING)
+    errh.setFormatter(fmt_file)
+    root_logger.addHandler(errh)
+
+    # Console Handler
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(fmt_console)
+    root_logger.addHandler(ch)
+
+    logger.info(f"Initialized organized logging system (Run ID: {run_id})")
+    logger.info(f"  [Log 1 - Verbose]   : {verbose_log_file}")
+    logger.info(f"  [Log 2 - Execution] : {execution_log_file}")
+    logger.info(f"  [Log 3 - Errors]    : {errors_log_file}")
+    logger.info(f"  [Log Tree Dir]      : {tree_dir}")
+
+    return {
+        "verbose": verbose_log_file,
+        "execution": execution_log_file,
+        "errors": errors_log_file,
+        "tree": tree_log_file,
+        "run_id": run_id
+    }
+
+
+def log_repository_tree(repo_dir: str, output_dir: str = "./outputs", max_depth: int = 3) -> str:
+    """
+    Builds an ASCII directory tree for the analyzed repo and logs it to verbose logger & tree log dir.
+    """
+    if not os.path.exists(repo_dir):
+        return ""
+
+    repo_name = os.path.basename(os.path.abspath(repo_dir))
+    tree_lines = [f"Repository Directory Tree: {repo_name}", "=" * 50]
+    skip_dirs = {".git", "node_modules", "venv", ".venv", "__pycache__", "bin", "obj", ".idea", ".vscode"}
+
+    def _walk(dir_path: str, prefix: str = "", depth: int = 0):
+        if depth > max_depth:
+            tree_lines.append(f"{prefix}└── ... (max depth limit reached)")
+            return
+        try:
+            entries = sorted(os.listdir(dir_path))
+        except Exception as e:
+            tree_lines.append(f"{prefix}[Error listing dir: {e}]")
+            return
+        filtered = [e for e in entries if e not in skip_dirs and not e.startswith(".")]
+        for idx, item in enumerate(filtered):
+            is_last = (idx == len(filtered) - 1)
+            branch = "└── " if is_last else "├── "
+            full_item = os.path.join(dir_path, item)
+            if os.path.isdir(full_item):
+                tree_lines.append(f"{prefix}{branch}{item}/")
+                _walk(full_item, prefix + ("    " if is_last else "│   "), depth + 1)
+            else:
+                tree_lines.append(f"{prefix}{branch}{item}")
+
+    _walk(repo_dir)
+    tree_text = "\n".join(tree_lines)
+    logger.debug(f"\n{tree_text}")
+
+    try:
+        tree_dir = os.path.join(output_dir, "logs", "tree")
+        os.makedirs(tree_dir, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        tree_file_path = os.path.join(tree_dir, f"repo_tree_{repo_name}_{ts}.log")
+        with open(tree_file_path, "w", encoding="utf-8") as f:
+            f.write(tree_text + "\n")
+    except Exception:
+        pass
+
+    return tree_text
+
+
+def filter_and_summarize_high_rating_repos(output_dir: str = "./outputs") -> Dict[str, Any]:
+    """
+    Summarizes all repositories in output_dir where:
+      "repo_rating": {
+         "rating": > 5.0,
+         "label": not poor
+      }
+    Generates:
+      - <output_dir>/summary_high_rating.json
+      - <output_dir>/summary_high_rating.csv
+    """
+    matched_repos = []
+    if not os.path.exists(output_dir):
+        return {"total_matching": 0, "repositories": []}
+
+    report_files = []
+    for root, dirs, files in os.walk(output_dir):
+        for fname in files:
+            if fname.endswith("_report.json") and not fname.startswith("summary_"):
+                report_files.append(os.path.join(root, fname))
+
+    seen_names = set()
+    for r_path in report_files:
+        try:
+            with open(r_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            r_name = data.get("repo") or os.path.basename(os.path.dirname(r_path))
+            heuristics = data.get("heuristics", {})
+            rating_info = heuristics.get("repo_rating", {})
+
+            score = float(rating_info.get("rating", 0.0))
+            label = str(rating_info.get("label", "N/A")).strip()
+
+            if score > 5.0 and label.lower() != "poor":
+                git_info = data.get("ground_truth", {}).get("git", {})
+                loc_info = data.get("ground_truth", {}).get("loc", {}).get("breakdown", {})
+                langs_dict = data.get("ground_truth", {}).get("languages", {}).get("breakdown", {})
+                langs_str = ", ".join(list(langs_dict.keys())[:5]) if isinstance(langs_dict, dict) else "N/A"
+                fws_dict = heuristics.get("frameworks", {})
+                fws_str = ", ".join(list(fws_dict.keys())[:5]) if isinstance(fws_dict, dict) else "N/A"
+
+                matched_repos.append({
+                    "repo_name": r_name,
+                    "rating": score,
+                    "label": label,
+                    "commits": git_info.get("commit_count", 0),
+                    "contributors": git_info.get("unique_contributors", 0),
+                    "loc": loc_info.get("code", 0),
+                    "languages": langs_str,
+                    "frameworks": fws_str,
+                    "report_path": r_path
+                })
+                seen_names.add(r_name)
+        except Exception as e:
+            logger.warning(f"Error reading report file {r_path}: {e}")
+
+    csv_file = os.path.join(output_dir, "summary_all.csv")
+    if os.path.isfile(csv_file):
+        try:
+            with open(csv_file, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    r_name = row.get("repo_name", "")
+                    if r_name and r_name not in seen_names:
+                        try:
+                            score = float(row.get("repo_rating_score", 0.0))
+                            label = str(row.get("repo_rating_label", "")).strip()
+                            if score > 5.0 and label.lower() != "poor":
+                                matched_repos.append({
+                                    "repo_name": r_name,
+                                    "rating": score,
+                                    "label": label,
+                                    "commits": int(row.get("commits", 0)),
+                                    "contributors": int(row.get("contributors", 0)),
+                                    "loc": int(row.get("loc_code", 0)),
+                                    "languages": row.get("languages", "N/A"),
+                                    "frameworks": row.get("frameworks", "N/A"),
+                                    "report_path": ""
+                                })
+                                seen_names.add(r_name)
+                        except (ValueError, TypeError):
+                            continue
+        except Exception as e:
+            logger.warning(f"Error reading {csv_file}: {e}")
+
+    matched_repos.sort(key=lambda x: x["rating"], reverse=True)
+
+    summary_result = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "filter": {
+            "min_rating": 5.0,
+            "exclude_label": "poor"
+        },
+        "total_matching": len(matched_repos),
+        "repositories": matched_repos
+    }
+
+    out_json = os.path.join(output_dir, "summary_high_rating.json")
+    try:
+        with open(out_json, "w", encoding="utf-8") as f:
+            json.dump(summary_result, f, indent=2)
+        logger.info(f"Saved high-rating repository JSON summary to: {out_json}")
+    except Exception as e:
+        logger.error(f"Failed to write {out_json}: {e}")
+
+    out_csv = os.path.join(output_dir, "summary_high_rating.csv")
+    try:
+        fieldnames = ["repo_name", "rating", "label", "commits", "contributors", "loc", "languages", "frameworks"]
+        with open(out_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for repo in matched_repos:
+                writer.writerow({k: repo.get(k, "") for k in fieldnames})
+        logger.info(f"Saved high-rating repository CSV summary to: {out_csv}")
+    except Exception as e:
+        logger.error(f"Failed to write {out_csv}: {e}")
+
+    return summary_result
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 SIMILARITY_THRESHOLD = 0.85
@@ -704,26 +987,42 @@ def computeSimilarity(tokens1: List[str], tokens2: List[str]) -> float:
     return len(set1 & set2) / len(set1 | set2)
 
 
-def cloneRepo(repoUrl: str, targetDir: str, githubToken: Optional[str] = None, gitlabToken: Optional[str] = None) -> bool:
+def cloneRepo(repoUrl: str, targetDir: str, githubToken: Optional[str] = None, gitlabToken: Optional[str] = None, azureToken: Optional[str] = None) -> bool:
     actualUrl = repoUrl
     maskedUrl = repoUrl
     tokens_to_mask = []
 
-    # Check for GitLab
+    m_token = re.search(r'https://([^/@]+)@', repoUrl)
+    if m_token:
+        embedded_tok = m_token.group(1)
+        if embedded_tok and embedded_tok.lower() not in ("git", "oauth2"):
+            tokens_to_mask.append(embedded_tok)
+
+    azInfo = extractAzureDevOpsRepoInfo(targetDir, repoUrl)
     glInfo = extractGitLabRepoInfo(targetDir, repoUrl)
-    if glInfo and gitlabToken:
+    ghInfo = extractGitHubRepoInfo(targetDir, repoUrl)
+
+    if azInfo:
+        org, project, repo = azInfo
+        token_use = azureToken or githubToken
+        clean_url = re.sub(r'https://[^/@]+@', 'https://', repoUrl)
+        if token_use:
+            actualUrl = clean_url.replace("https://", f"https://{token_use}@")
+            maskedUrl = clean_url.replace("https://", "https://[MASKED]@")
+            tokens_to_mask.append(token_use)
+        else:
+            actualUrl = clean_url
+            maskedUrl = clean_url
+    elif glInfo and gitlabToken:
         domain, project_path, _ = glInfo
         actualUrl = f"https://oauth2:{gitlabToken}@{domain}/{project_path}.git"
         maskedUrl = f"https://oauth2:[MASKED]@{domain}/{project_path}.git"
         tokens_to_mask.append(gitlabToken)
-    else:
-        # Check for GitHub
-        ghInfo = extractGitHubRepoInfo(targetDir, repoUrl)
-        if ghInfo and githubToken:
-            owner, repo = ghInfo
-            actualUrl = f"https://{githubToken}@github.com/{owner}/{repo}.git"
-            maskedUrl = f"https://[MASKED]@github.com/{owner}/{repo}.git"
-            tokens_to_mask.append(githubToken)
+    elif ghInfo and githubToken:
+        owner, repo = ghInfo
+        actualUrl = f"https://{githubToken}@github.com/{owner}/{repo}.git"
+        maskedUrl = f"https://[MASKED]@github.com/{owner}/{repo}.git"
+        tokens_to_mask.append(githubToken)
 
     def mask_text(text: str) -> str:
         if not text:
@@ -1354,6 +1653,7 @@ def runGit(args: List[str], cwd: str, timeout: int = GIT_LOG_TIMEOUT) -> Optiona
         result = subprocess.run(
             ["git"] + args,
             cwd=cwd,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -1453,8 +1753,15 @@ def runStage0GitAnalysis(repoDir: str) -> Dict[str, Any]:
     print(f"[Stage 0] Analyzing Git history in {repoDir}...")
 
     raw = runGit(["rev-list", "--count", "HEAD"], repoDir)
+    if not raw or not raw.isdigit():
+        raw = runGit(["rev-list", "--count", "--all"], repoDir)
+
     if raw and raw.isdigit():
         result["commit_count"] = int(raw)
+
+    if result["commit_count"] == 0:
+        print(f"[Stage 0] Empty git repository (0 commits) at {repoDir}.")
+        return result
 
     raw = runGit(["log", "--all", "--format=%ae"], repoDir)
     if raw:
@@ -2214,6 +2521,143 @@ def scanSecrets(fileList: List[str]) -> Dict[str, Any]:
             "low"
         ),
     }
+def extractAzureDevOpsRepoInfo(targetDir: str, inputTarget: str) -> Optional[Tuple[str, str, str]]:
+    """
+    Extracts (org, project, repo) from Azure DevOps inputTarget or git remote.
+    Returns: (org, project, repo)
+    """
+    candidates = [inputTarget]
+    if os.path.isdir(os.path.join(targetDir, ".git")):
+        remote_url = runGit(["config", "--get", "remote.origin.url"], targetDir)
+        if remote_url:
+            candidates.append(remote_url)
+
+    for cand in candidates:
+        if not cand:
+            continue
+        clean_cand = re.sub(r'https://[^/@]+@', 'https://', cand)
+        
+        m = re.search(r'dev\.azure\.com/([^/]+)/([^/]+)/_git/([^/]+)', clean_cand, re.IGNORECASE)
+        if m:
+            org = m.group(1)
+            project = m.group(2)
+            repo = m.group(3).replace('.git', '')
+            return (org, project, repo)
+            
+        m2 = re.search(r'([^/]+)\.visualstudio\.com/(?:DefaultCollection/)?([^/]+)/_git/([^/]+)', clean_cand, re.IGNORECASE)
+        if m2:
+            org = m2.group(1)
+            project = m2.group(2)
+            repo = m2.group(3).replace('.git', '')
+            return (org, project, repo)
+
+    return None
+
+
+def runAzureDevOpsPrAnalysis(
+    targetDir: str,
+    inputTarget: str,
+    token: Optional[str],
+    outputDir: str,
+) -> Dict[str, Any]:
+    """
+    Azure DevOps PR analytics module (Stage 0.5/Enrichment stage).
+    """
+    defaults = {
+        "total_pr_count": 0,
+        "open_pr_count": 0,
+        "closed_pr_count": 0,
+        "merged_pr_count": 0,
+        "azure_pr_analysis_available": False,
+    }
+
+    env_token = os.getenv("AZURE_DEVOPS_TOKEN") or os.getenv("AZURE_TOKEN") or os.getenv("AZ_TOKEN")
+    final_token = env_token or token
+
+    info = extractAzureDevOpsRepoInfo(targetDir, inputTarget)
+    if not info:
+        logger.info("Not an Azure DevOps repository or remote URL. Skipping PR analysis.")
+        return defaults
+
+    org, project, repo_name = info
+
+    if not final_token:
+        logger.warning("Azure DevOps token missing. Skipping Azure PR analytics.")
+        return defaults
+
+    url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/pullrequests?searchCriteria.status=all&api-version=7.0"
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Repo-Analysis-Tool/3.0"
+    }
+    auth_str = f":{final_token}"
+    b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
+    headers["Authorization"] = f"Basic {b64_auth}"
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            prs = data.get("value", [])
+            
+            total_count = len(prs)
+            open_count = sum(1 for pr in prs if pr.get("status") == "active")
+            closed_count = sum(1 for pr in prs if pr.get("status") in ("abandoned", "completed"))
+            merged_count = sum(1 for pr in prs if pr.get("status") == "completed")
+
+            return {
+                "total_pr_count": total_count,
+                "open_pr_count": open_count,
+                "closed_pr_count": closed_count,
+                "merged_pr_count": merged_count,
+                "azure_pr_analysis_available": True,
+            }
+    except Exception as e:
+        logger.warning(f"Azure DevOps PR fetch failed: {e}")
+        return defaults
+
+
+def enrichViaAzureDevOpsApi(azure_info: Tuple[str, str, str], token: Optional[str]) -> Dict[str, Any]:
+    """
+    Enriches repository metadata via Azure DevOps REST API.
+    """
+    org, project, repo_name = azure_info
+    url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}?api-version=7.0"
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Repo-Analysis-Tool/3.0"
+    }
+    if token:
+        auth_str = f":{token}"
+        b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
+        headers["Authorization"] = f"Basic {b64_auth}"
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return {
+                "stars": 0,
+                "forks": 0,
+                "open_issues": 0,
+                "subscribers": 0,
+                "default_branch": data.get("defaultBranch", "").replace("refs/heads/", ""),
+                "description": f"Azure DevOps Repo in project '{project}'",
+                "web_url": data.get("webUrl", ""),
+                "size_kb": data.get("size", 0) // 1024 if data.get("size") else 0,
+                "platform": "azure_devops"
+            }
+    except Exception as e:
+        logger.warning(f"Azure DevOps API enrichment failed: {e}")
+        return {
+            "stars": 0,
+            "forks": 0,
+            "open_issues": 0,
+            "subscribers": 0,
+            "default_branch": "main",
+            "description": f"Azure DevOps Repo '{repo_name}'",
+            "platform": "azure_devops"
+        }
 
 
 def extractGitLabRepoInfo(targetDir: str, inputTarget: str) -> Optional[Tuple[str, str, str]]:
@@ -2624,13 +3068,12 @@ def fetchPullRequests(g: Github, repo) -> List[Dict[str, Any]]:
         })
 
         # Detailed attributes: additions, deletions, changed_files, commits, comments, review_comments
+        # Only fetch details if rate limit allows
         try:
             if count % 100 == 0:
-                try:
-                    rate_limit = g.get_rate_limit().core
-                    remaining = rate_limit.remaining
-                except Exception:
-                    pass
+                core = getCoreRateLimit(g)
+                if core is not None:
+                    remaining = core.remaining
 
             # If remaining rate limit is low (e.g. < 150), skip detailed fetch
             if remaining < 150:
@@ -2638,33 +3081,56 @@ def fetchPullRequests(g: Github, repo) -> List[Dict[str, Any]]:
                     "additions": None,
                     "deletions": None,
                     "changed_files": None,
-                    "comments": getattr(pr, "comments", None),
-                    "review_comments": getattr(pr, "review_comments", None),
+                    "comments": None,
+                    "review_comments": None,
                     "commits": None,
                 })
             else:
                 def _fetch_details():
                     # Accessing additions triggers the detailed GET request
-                    return (pr.additions, pr.deletions, pr.changed_files, pr.commits, pr.comments, pr.review_comments)
+                    # Use getattr with default to avoid attribute errors
+                    additions = getattr(pr, "additions", None)
+                    deletions = getattr(pr, "deletions", None)
+                    changed_files = getattr(pr, "changed_files", None)
+                    # commits, comments, review_comments are PaginatedLists - get totalCount if available
+                    commits = getattr(pr, "commits", None)
+                    comments = getattr(pr, "comments", None)
+                    review_comments = getattr(pr, "review_comments", None)
+                    return (additions, deletions, changed_files, commits, comments, review_comments)
 
                 additions, deletions, changed_files, commits, comments, review_comments = callWithRetry(
                     g, _fetch_details)
+                
+                # Handle PaginatedList - extract totalCount if available
+                def _get_total_count(obj):
+                    if obj is None:
+                        return None
+                    if hasattr(obj, "totalCount"):
+                        return obj.totalCount
+                    if hasattr(obj, "__len__"):
+                        try:
+                            return len(obj)
+                        except Exception:
+                            return None
+                    return obj
+
                 pr_dict.update({
                     "additions": additions,
                     "deletions": deletions,
                     "changed_files": changed_files,
-                    "comments": comments,
-                    "review_comments": review_comments,
-                    "commits": commits,
+                    "commits": _get_total_count(commits),
+                    "comments": _get_total_count(comments),
+                    "review_comments": _get_total_count(review_comments),
                 })
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to fetch PR details for #{pr.number}: {e}")
             # Fallback to None/safe defaults for detailed fields on error
             pr_dict.update({
                 "additions": None,
                 "deletions": None,
                 "changed_files": None,
-                "comments": getattr(pr, "comments", None),
-                "review_comments": getattr(pr, "review_comments", None),
+                "comments": None,
+                "review_comments": None,
                 "commits": None,
             })
 
@@ -2779,6 +3245,15 @@ def runGitHubPrAnalysis(
             g = Github(auth=auth)
         except (ImportError, AttributeError):
             g = Github(final_token)
+        
+        # Test API access and get rate limit
+        try:
+            core = getCoreRateLimit(g)
+            if core:
+                logger.info(f"GitHub API rate limit: {core.remaining}/{core.limit} remaining")
+        except Exception as e:
+            logger.debug(f"Could not check initial rate limit: {e}")
+
         repo = g.get_repo(f"{owner}/{repo_name}")
 
         prs = fetchPullRequests(g, repo)
@@ -2813,9 +3288,20 @@ def enrichViaGithubApi(
         return {"available": False, "reason": "Cannot parse GitHub URL"}
 
     try:
-        g = Github(token)
+        try:
+            from github import Auth
+            auth = Auth.Token(token)
+            g = Github(auth=auth)
+        except (ImportError, AttributeError):
+            g = Github(token)
+        
+        # Check rate limit before making requests
+        core = getCoreRateLimit(g)
+        if core and core.remaining < 10:
+            logger.warning(f"Rate limit too low for enrichment ({core.remaining} remaining). Skipping.")
+            return {"available": False, "reason": "Rate limit too low"}
+        
         repo = g.get_repo(f"{m.group(1)}/{m.group(2)}")
-
 
         return {
             "available":       True,
@@ -2829,15 +3315,16 @@ def enrichViaGithubApi(
             "open_issues":     repo.open_issues_count,
             "topics":          repo.get_topics(),
             "default_branch":  repo.default_branch,
-            "created_at":      str(repo.created_at.date()),
-            "pushed_at":       str(repo.pushed_at.date()),
+            "created_at":      str(repo.created_at.date()) if repo.created_at else None,
+            "pushed_at":       str(repo.pushed_at.date()) if repo.pushed_at else None,
             "size_kb":         repo.size,
             "license":         (repo.license.spdx_id if repo.license else None),
             "language":        repo.language,
-            "subscribers":     repo.subscribers_count,  # Watchers
+            "subscribers":     repo.subscribers_count,
             "visibility":      "private" if repo.private else "public",
         }
     except Exception as exc:
+        logger.debug(f"GitHub enrichment failed: {exc}")
         return {"available": False, "reason": str(exc)}
 
 
@@ -3284,11 +3771,13 @@ def runInteractiveMode() -> Optional[argparse.Namespace]:
             max_files=maxFiles
         )
 
-
 def runAnalysis(args: argparse.Namespace) -> bool:
     """
     Execute complete analysis pipeline (Stages 0–5).
     """
+    output_dir = getattr(args, "output_dir", "./outputs")
+    setup_organized_logging(output_dir=output_dir)
+
     inputTarget = args.input
     githubToken = getattr(args, "github_token", None)
     if not githubToken:
@@ -3296,6 +3785,9 @@ def runAnalysis(args: argparse.Namespace) -> bool:
     gitlabToken = getattr(args, "gitlab_token", None)
     if not gitlabToken:
         gitlabToken = os.getenv("GITLAB_TOKEN") or os.getenv("GL_TOKEN")
+    azureToken = getattr(args, "azure_token", None)
+    if not azureToken:
+        azureToken = os.getenv("AZURE_DEVOPS_TOKEN") or os.getenv("AZURE_TOKEN") or os.getenv("AZ_TOKEN")
     startTime = time.time()
 
     isUrl = (
@@ -3318,7 +3810,7 @@ def runAnalysis(args: argparse.Namespace) -> bool:
             else:
                 logger.info(f"[cloneRepo] Cloning repository to: {targetDir}")
                 print("\nCloning repository (this may take a moment)...")
-                success = cloneRepo(inputTarget, targetDir, githubToken, gitlabToken)
+                success = cloneRepo(inputTarget, targetDir, githubToken, gitlabToken, azureToken)
                 if not success:
                     return False
                 logger.info(f"[cloneRepo] Repository available at: {targetDir}")
@@ -3327,12 +3819,10 @@ def runAnalysis(args: argparse.Namespace) -> bool:
                 logger.error(f"[runAnalysis] Path does not exist: {inputTarget}")
                 return False
 
-        # Strict isolation: ensure we are at the repo root or targeting a directory
         if not os.path.isdir(targetDir):
             logger.error(f"[runAnalysis] Target is not a directory: {targetDir}")
             return False
 
-        # Smart Git root discovery
         gitDir = os.path.join(targetDir, ".git")
         if not os.path.isdir(gitDir):
             try:
@@ -3347,6 +3837,7 @@ def runAnalysis(args: argparse.Namespace) -> bool:
                 pass
 
         isGit = os.path.isdir(gitDir)
+        log_repository_tree(targetDir, output_dir=output_dir)
 
         report = {
             "repo": os.path.basename(targetDir),
@@ -3378,7 +3869,6 @@ def runAnalysis(args: argparse.Namespace) -> bool:
         }
         report["performance"]["stage0_seconds"] = round(time.time() - s0Start, 2)
 
-        # Calculate OS-safe outDir matching saveReport logic
         repoName = os.path.basename(os.path.abspath(targetDir))
         if isUrl:
             safeName = inputTarget.rstrip("/").split("/")[-1].replace(".git", "")
@@ -3386,8 +3876,15 @@ def runAnalysis(args: argparse.Namespace) -> bool:
         else:
             prOutDir = os.path.join(args.output_dir, repoName)
 
+        azure_info = extractAzureDevOpsRepoInfo(targetDir, inputTarget)
         gitlab_info = extractGitLabRepoInfo(targetDir, inputTarget)
-        if gitlab_info:
+        if azure_info:
+            print("[Stage 0.5] Running Azure DevOps PR analytics...")
+            s05Start = time.time()
+            prMetrics = runAzureDevOpsPrAnalysis(targetDir, inputTarget, azureToken or githubToken, prOutDir)
+            report["github_prs"] = prMetrics
+            report["performance"]["stage0_5_seconds"] = round(time.time() - s05Start, 2)
+        elif gitlab_info:
             print("[Stage 0.5] Running GitLab MR analytics...")
             s05Start = time.time()
             prMetrics = runGitLabMrAnalysis(targetDir, inputTarget, gitlabToken, prOutDir)
@@ -3419,7 +3916,6 @@ def runAnalysis(args: argparse.Namespace) -> bool:
                 "source": "cloc"
             }
 
-            # Map cloc breakdown to languages
             langBreakdown = {}
             for lang, stats in clocData.items():
                 if lang in ("SUM", "header"):
@@ -3431,7 +3927,6 @@ def runAnalysis(args: argparse.Namespace) -> bool:
                     "pct": round((stats["code"] / sum_code * 100), 2) if sum_code > 0 else 0
                 }
 
-            # Differentiate between core (code) and total (all) languages
             coreLangs = [lang for lang in langBreakdown.keys() if lang not in NON_CORE_FORMATS]
 
             report["ground_truth"]["languages"] = {
@@ -3495,7 +3990,6 @@ def runAnalysis(args: argparse.Namespace) -> bool:
             report["heuristics"]["runtime"] = nodeRuntime
             report["tool_metrics"]["compliance"] = detectOpenSource(targetDir)
 
-            # Infrastructure, Testing & Documentation
             report["heuristics"]["infrastructure"] = detectInfrastructure(targetDir)
             report["heuristics"]["byte_breakdown"] = calculateByteBreakdown(targetDir)
             report["heuristics"]["docs"] = analyzeDocumentation(targetDir)
@@ -3512,7 +4006,7 @@ def runAnalysis(args: argparse.Namespace) -> bool:
             ratingData = computeRepoRating(
                 gitData,
                 report["heuristics"],
-                report["ground_truth"],  # Pass full ground truth
+                report["ground_truth"],
                 report["ground_truth"]["languages"],
             )
             report["heuristics"]["repo_rating"] = ratingData
@@ -3526,13 +4020,20 @@ def runAnalysis(args: argparse.Namespace) -> bool:
             report["performance"]["stage5_seconds"] = round(time.time() - s5Start, 2)
 
         if isUrl:
+            azure_info = extractAzureDevOpsRepoInfo(targetDir, inputTarget)
             gitlab_info = extractGitLabRepoInfo(targetDir, inputTarget)
-            if gitlab_info:
+            github_info = extractGitHubRepoInfo(targetDir, inputTarget)
+
+            if azure_info:
+                print("[Azure DevOps API] Enriching via Azure DevOps REST API...")
+                azData = enrichViaAzureDevOpsApi(azure_info, azureToken or githubToken)
+                report["github_api"] = azData
+            elif gitlab_info:
                 domain, project_path, _ = gitlab_info
                 print("[GitLab API] Enriching via GitLab REST API...")
                 glData = enrichViaGitLabApi(domain, project_path, gitlabToken)
                 report["github_api"] = glData
-            elif githubToken or HAS_PYGITHUB:
+            elif github_info and (githubToken or HAS_PYGITHUB):
                 print("[GitHub API] Enriching via GitHub REST API...")
                 ghData = enrichViaGithubApi(inputTarget, githubToken)
                 report["github_api"] = ghData
@@ -3544,61 +4045,115 @@ def runAnalysis(args: argparse.Namespace) -> bool:
         tm = report.get("tool_metrics", {})
         he = report.get("heuristics", {})
 
-        loc_val = gt.get("loc", {}).get("value", 0)
-        llm_tok = tm.get("tokens", {}).get("llm", 0)
-        commits = gt.get("git", {}).get("commit_count", "N/A")
-        persons = gt.get("git", {}).get("unique_contributors", "N/A")
-        all_persons = gt.get("git", {}).get("all_contributors_count", "N/A")
-        all_persons_list = gt.get("git", {}).get("all_contributors", [])
-        all_persons_names = ", ".join([c.get("name", "") for c in all_persons_list])
-        if len(all_persons_names) > 120:
-            all_persons_names = all_persons_names[:117] + "..."
-        langs = gt.get("languages", {}).get("list", [])
-        rating = he.get("repo_rating", {})
-        dup_pct = tm.get("duplication", {}).get("token_weighted", 0.0) * 100
-        sec_count = tm.get("secrets", {}).get("findings_count", 0)
-        is_os = tm.get("compliance", {}).get("is_open_source", "N/A")
-        git_ok = gt.get("git", {}).get("history_integrity", {}).get("appears_intact", "N/A")
-
-        prMetrics = report.get("github_prs", {})
-        pr_avail = prMetrics.get("github_pr_analysis_available", False)
-        pr_total = prMetrics.get("total_pr_count", "N/A") if pr_avail else "N/A"
-        pr_open = prMetrics.get("open_pr_count", "N/A") if pr_avail else "N/A"
-        pr_closed = prMetrics.get("closed_pr_count", "N/A") if pr_avail else "N/A"
-        pr_merged = prMetrics.get("merged_pr_count", "N/A") if pr_avail else "N/A"
-
-        primaryLangs = [lang for lang in langs if lang not in NON_CORE_FORMATS]
-
-        print("\n" + "=" * 44)
-        print("  Analysis Complete — v3.0.0 (Production Refactor)")
-        print("=" * 44)
-        print(f"  LOC (Verified)   : {loc_val:,}")
-        print(f"  LLM Tokens       : {llm_tok:,}")
-        print(f"  Commits          : {commits}")
-        print(f"  Contributors (U) : {persons}")
-        print(f"  Contributors (All): {all_persons}")
-        print(f"  All Contrib Names: {all_persons_names}")
-        print(f"  Languages        : {', '.join(primaryLangs[:5])}")
-        print(f"  Rating           : {rating.get('rating', 'N/A')} / 10  ({rating.get('label', '')})")
-        print(f"  Duplication      : {dup_pct:.1f}% (token-weighted)")
-        print(f"  Secrets found    : {sec_count}")
-        print(f"  Open Source      : {is_os}")
-        print(f"  Git History OK   : {git_ok}")
-        pr_label = "GitLab MRs" if gitlab_info else "GitHub PRs"
-        print(f"  {pr_label} (Tot) : {pr_total}")
-        print(f"  {pr_label} (Opn) : {pr_open}")
-        print(f"  {pr_label} (Cld) : {pr_closed}")
-        print(f"  {pr_label} (Mrg) : {pr_merged}")
-        print(f"\n  Report saved to  :\n  {outFile}")
-        if isUrl:
-            print(f"  Repo cloned to   :\n  {targetDir}")
-        print("=" * 44)
+        print("\n" + "=" * 60)
+        print("  ANALYSIS COMPLETE")
+        print("=" * 60)
+        print(f"  Target         : {inputTarget}")
+        print(f"  Repo Directory : {targetDir}")
+        print(f"  Report Saved   : {outFile}")
+        print("-" * 60)
+        print("  KEY METRICS:")
+        print(f"    - LOC (Code)   : {gt.get('loc', {}).get('value', 0):,}")
+        print(f"    - Commits      : {gt.get('git', {}).get('commit_count', 0):,}")
+        print(f"    - Contributors : {gt.get('git', {}).get('unique_contributors', 0)}")
+        print(f"    - LLM Tokens   : {tm.get('tokens', {}).get('llm', 0):,}")
+        print(f"    - Rating Score : {he.get('repo_rating', {}).get('rating', 0.0):.2f} / 10.0 ({he.get('repo_rating', {}).get('label', 'N/A')})")
+        print(f"    - Total Time   : {report.get('performance', {}).get('total_seconds', 0)}s")
+        print("=" * 60 + "\n")
 
         return True
 
-    except KeyboardInterrupt:
-        print("\n[!] Pipeline interrupted safely.")
+    except Exception as e:
+        logger.exception(f"Unhandled error analyzing {inputTarget}: {e}")
         return False
+
+
+def runInteractiveMode() -> Optional[argparse.Namespace]:
+    """
+    Guided terminal UI for configuring analysis parameters.
+    Loops until valid configuration or exit.
+    """
+    while True:
+        print("\n" + "=" * 34)
+        print("   REPOSITORY ANALYSIS TOOL")
+        print("=" * 34)
+        print("1. Analyze Local Repository")
+        print("2. Analyze Git Repository")
+        print("3. Exit")
+
+        choice = input("\nSelect an option: ").strip()
+
+        if choice == "3":
+            return None
+
+        elif choice == "1":
+            inputTarget = input("\nEnter local repository path: ").strip().strip('"')
+            if not inputTarget or not os.path.isdir(inputTarget):
+                print("[!] Error: Invalid or non-existent directory path.")
+                continue
+
+        elif choice == "2":
+            inputTarget = input("\nEnter Git repository URL: ").strip().strip('"')
+            if not (
+                inputTarget.startswith("http://")
+                or inputTarget.startswith("https://")
+                or inputTarget.startswith("git@")
+            ):
+                print("[!] Error: Invalid Git URL.")
+                continue
+
+        else:
+            print("[!] Invalid choice. Please select 1, 2, or 3.")
+            continue
+
+        print("\nSelect Analysis Mode:")
+        print("1. Stage 1 (Pre-check)")
+        print("2. Stage 2 (Deep Analysis)")
+        print("3. Full Pipeline (Recommended)")
+        mChoice = input("\nEnter choice: ").strip()
+
+        mode = "full"
+        if mChoice == "1":
+            mode = "stage1"
+        elif mChoice == "2":
+            mode = "stage2"
+        elif mChoice == "3":
+            mode = "full"
+        else:
+            print("Invalid choice, defaulting to Full Pipeline.")
+
+        ghToken = None
+        glToken = None
+        azToken = None
+        if choice == "2":
+            if "github" in inputTarget.lower():
+                ghToken = input("Enter GitHub Token (optional): ").strip() or None
+            elif "gitlab" in inputTarget.lower():
+                glToken = input("Enter GitLab Token (optional): ").strip() or None
+            elif "azure" in inputTarget.lower() or "visualstudio" in inputTarget.lower():
+                azToken = input("Enter Azure DevOps Token (optional): ").strip() or None
+
+        print("\nConfigure Options:")
+        mf = input("Max files to process (Press Enter for ALL files): ").strip()
+        maxFiles = int(mf) if mf.isdigit() else None
+
+        od = input("Output directory (default: ./outputs): ").strip()
+        outDir = od if od else "./outputs"
+
+        proceed = input("\nProceed? (y/n, or press Enter for yes): ").strip().lower()
+        if proceed not in ("", "y", "yes"):
+            continue
+
+        return argparse.Namespace(
+            input=inputTarget,
+            output_dir=outDir,
+            clone_dir=None,
+            mode=mode,
+            max_files=maxFiles,
+            github_token=ghToken,
+            gitlab_token=glToken,
+            azure_token=azToken
+        )
 
 
 def main():
@@ -3656,6 +4211,8 @@ Examples:
                         help="GitHub Personal Access Token for API enrichment (needed for private repos)")
     parser.add_argument("--gitlab-token", type=str, default=None,
                         help="GitLab Personal Access Token for API enrichment (needed for private repos)")
+    parser.add_argument("--azure-token", type=str, default=None,
+                        help="Azure DevOps Personal Access Token for API enrichment and cloning (needed for private repos)")
     parser.add_argument("--batch", type=str, default=None,
                         help="Path to a text file containing one repo URL or local path per line")
 
@@ -3697,11 +4254,13 @@ Examples:
                     max_files=args.max_files,
                     github_token=args.github_token,
                     gitlab_token=args.gitlab_token,
+                    azure_token=args.azure_token,
                 )
                 if runAnalysis(batch_args):
                     success_count += 1
             print(f"\n[Batch] Completed: {success_count}/{len(targets)} succeeded.")
             print(f"[Batch] Summary CSV: {os.path.join(args.output_dir, 'summary_all.csv')}")
+            filter_and_summarize_high_rating_repos(output_dir=args.output_dir)
 
         elif args.input:
             runAnalysis(args)

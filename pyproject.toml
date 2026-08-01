@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repo-analysis-tool"
+version = "3.0.0"
+description = "Repository Intelligence CLI Tool - Multi-stage static analysis pipeline"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Repository Intelligence Team"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "psutil>=5.9.0",
+    "tiktoken>=0.7.0",
+    "PyGithub>=2.1.0",
+    "textual>=0.52.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+repo-analysis = "repo_analysis.analyzer:main"
+repo-analysis-tui = "repo_analysis.tui:main"
+repo-analysis-tui-backend = "repo_analysis.tui_backend:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["repo_analysis*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+select = ["E", "F", "I", "UP", "W"]
+ignore = ["E501", "UP037"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
