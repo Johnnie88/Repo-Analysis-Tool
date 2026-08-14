@@ -11,6 +11,7 @@ venv/
 dist/
 build/
 .env
+AGENTS.md
 .outputs/
 outputs/
 cloned_repos/

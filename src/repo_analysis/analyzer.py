@@ -1079,9 +1079,6 @@ def cloneRepo(repoUrl: str, targetDir: str, githubToken: Optional[str] = None, g
                 errors="replace"
             )
             return result.returncode == 0
-        except subprocess.CalledProcessError as e:
-            logger.error(f"[cloneRepo] Clone failed with exit code {e.returncode}")
-            return False
         except FileNotFoundError:
             logger.error("[cloneRepo] 'git' command not found. Please install git.")
             return False
@@ -1243,7 +1240,7 @@ def getClocCommand() -> str:
     return "cloc"
 
 
-def runCloc(repoDir: str, fileList: List[str] = None) -> Dict[str, Any]:
+def runCloc(repoDir: str, fileList: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Run cloc on the repository and return the parsed JSON output.
     If fileList is provided, it uses --list-file to ensure perfect sync.
@@ -1327,7 +1324,7 @@ def processFileBatch(batch: List[str]) -> List[Dict[str, Any]]:
             if not content:
                 continue
 
-            llmTokens = len(ENCODING.encode(content)) if HAS_TIKTOKEN else (len(content) // 4)
+            llmTokens = getLlmTokens(content)
             lexicalTokens = len(countLexicalTokens(content))
             loc = countLoc(content)
 
@@ -1498,13 +1495,13 @@ def runStage2Analysis(
     tokenWeighted = (totalDuplicateTokens / totalLlm) if totalLlm > 0 else 0
 
     if len(similarClusters) > 0 and totalDuplicateTokens == 0:
-        raise ValueError("[stage2] Duplication broken: similarity exists but duplicate_tokens = 0")
+        logger.error("[stage2] Duplication broken: similarity exists but duplicate_tokens = 0")
 
     if exactDuplicateCount > 0 and exactDuplicateTokens == 0:
-        raise ValueError("[stage2] Exact duplicates not contributing to token count")
+        logger.error("[stage2] Exact duplicates not contributing to token count")
 
     if len(similarClusters) > 0 and similarDuplicateTokens == 0 and exactDuplicateTokens == 0:
-        raise ValueError("[stage2] Inconsistent similarity vs duplication metrics")
+        logger.error("[stage2] Inconsistent similarity vs duplication metrics")
 
     return {
         "metrics": {
@@ -1607,13 +1604,13 @@ def runAiDetectionAnalysis(
     smoothness = calculateTokenSmoothness(filteredStats)
 
     if len(similarClusters) > 0 and duplicationMetrics.get("duplicate_tokens", 0) == 0:
-        raise ValueError("[aiDetection] CRITICAL: similarity exists but duplicate_tokens = 0")
+        logger.error("[aiDetection] CRITICAL: similarity exists but duplicate_tokens = 0")
 
     if duplicationMetrics.get("exact_duplicate_files", 0) > 0 and duplicationMetrics.get("duplicate_tokens", 0) == 0:
-        raise ValueError("[aiDetection] CRITICAL: exact duplicates not contributing to tokens")
+        logger.error("[aiDetection] CRITICAL: exact duplicates not contributing to tokens")
 
     if similaritySignal > 0.8 and duplicationSignal < 0.1:
-        raise ValueError("[aiDetection] CRITICAL: inconsistent similarity vs duplication")
+        logger.error("[aiDetection] CRITICAL: inconsistent similarity vs duplication")
 
     aiScore = (
         0.30 * duplicationSignal +
@@ -1663,7 +1660,7 @@ def runGit(args: List[str], cwd: str, timeout: int = GIT_LOG_TIMEOUT) -> Optiona
         if result.returncode == 0:
             return result.stdout.strip()
         return None
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+    except Exception:
         return None
 
 
@@ -1907,7 +1904,7 @@ def computeLanguageBreakdown(
 
     breakdown = {}
     for lang, loc in sorted(langLoc.items(), key=lambda x: -x[1]):
-        pct = round(loc / totalLoc * 100, 2) if total_loc else 0.0
+        pct = round(loc / totalLoc * 100, 2) if totalLoc else 0.0
         breakdown[lang] = {
             "loc":   loc,
             "files": langFiles[lang],
@@ -2709,7 +2706,7 @@ def extractGitLabRepoInfo(targetDir: str, inputTarget: str) -> Optional[Tuple[st
     return None
 
 
-def callGitLabApi(url: str, headers: dict, params: dict = None) -> Optional[Any]:
+def callGitLabApi(url: str, headers: dict, params: Optional[dict] = None) -> Optional[Any]:
     """
     Executes a GitLab API request with rate limit handling and retries.
     """
@@ -3686,90 +3683,6 @@ def saveReport(
 
     return outFile
 
-
-def runInteractiveMode() -> Optional[argparse.Namespace]:
-    """
-    Guided terminal UI for configuring analysis parameters.
-    Loops until valid configuration or exit.
-    """
-    while True:
-        print("\n" + "=" * 34)
-        print("   REPOSITORY ANALYSIS TOOL")
-        print("=" * 34)
-        print("1. Analyze Local Repository")
-        print("2. Analyze Git Repository")
-        print("3. Exit")
-
-        choice = input("\nSelect an option: ").strip()
-
-        if choice == "3":
-            return None
-
-        elif choice == "1":
-            inputTarget = input("\nEnter local repository path: ").strip().strip('"')
-            if not inputTarget or not os.path.isdir(inputTarget):
-                print("[!] Error: Invalid or non-existent directory path.")
-                continue
-
-        elif choice == "2":
-            inputTarget = input("\nEnter Git repository URL: ").strip().strip('"')
-            if not (
-                inputTarget.startswith("http://")
-                or inputTarget.startswith("https://")
-                or inputTarget.startswith("git@")
-            ):
-                print("[!] Error: Invalid Git URL.")
-                continue
-
-        else:
-            print("[!] Invalid choice. Please select 1, 2, or 3.")
-            continue
-
-        print("\nSelect Analysis Mode:")
-        print("1. Stage 1 (Pre-check)")
-        print("2. Stage 2 (Deep Analysis)")
-        print("3. Full Pipeline (Recommended)")
-        mChoice = input("\nEnter choice: ").strip()
-
-        mode = "full"
-        if mChoice == "1":
-            mode = "stage1"
-        elif mChoice == "2":
-            mode = "stage2"
-        elif mChoice == "3":
-            mode = "full"
-        else:
-            print("Invalid choice, defaulting to Full Pipeline.")
-
-        print("\nConfigure Options:")
-        mf = input("Max files to process (Press Enter for ALL files): ").strip()
-        maxFiles = int(mf) if mf.isdigit() else None
-
-        od = input("Output directory (default: ./outputs): ").strip()
-        outDir = od if od else "./outputs"
-
-        proceed = input("\nProceed? (y/n, or press Enter for yes): ").strip().lower()
-        if proceed not in ("", "y", "yes"):
-            continue
-
-        print("\n" + "=" * 34)
-        print("Execution Summary")
-        print("=" * 34)
-        print(f"Input Type   : {'Local' if choice == '1' else 'Git'}")
-        print(f"Target       : {inputTarget}")
-        print(f"Mode         : {mode.capitalize()}")
-        print(f"Output Dir   : {outDir}")
-        print(f"Max Files    : {maxFiles}")
-        print("=" * 34)
-        print("Starting analysis...\n")
-
-        return argparse.Namespace(
-            input=inputTarget,
-            output_dir=outDir,
-            clone_dir=None,
-            mode=mode,
-            max_files=maxFiles
-        )
 
 def runAnalysis(args: argparse.Namespace) -> bool:
     """

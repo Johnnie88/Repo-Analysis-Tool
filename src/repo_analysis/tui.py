@@ -439,10 +439,7 @@ class PATInputScreen(Screen):
 
     @on(Button.Pressed, "#btn-back")
     def action_go_back(self) -> None:
-        if self.from_web:
-            self.app.pop_screen()
-        else:
-            self.app.pop_screen()
+        self.app.pop_screen()
 
     @on(Button.Pressed, "#btn-continue")
     @on(Input.Submitted, "#pat-input")
@@ -703,7 +700,7 @@ class RepoSelectionScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#repo-table", DataTable)
-        table.add_columns("#", "Repository", "Description", "Select")
+        table.add_columns("#", "Repository", "Description", ("Select", "Select"))
         for idx, repo in enumerate(self.repos, 1):
             table.add_row(
                 str(idx),
@@ -717,14 +714,14 @@ class RepoSelectionScreen(Screen):
 
     @on(DataTable.CellSelected, "#repo-table")
     def on_cell_selected(self, event: DataTable.CellSelected) -> None:
-        if event.column_key == "Select":
-            self.toggle_selection(event.row_key)
+        if event.cell_key.column_key == "Select":
+            self.toggle_selection(event.cell_key.row_key)
 
     def key_space(self, event: Key) -> None:
         table = self.query_one("#repo-table", DataTable)
         if table.cursor_row is not None:
-            row_key = table.get_row_at(table.cursor_row)[3]
-            self.toggle_selection(row_key)
+            cell_key = table.coordinate_to_cell_key(table.cursor_coordinate)
+            self.toggle_selection(cell_key.row_key)
             event.prevent_default().stop()
 
     def toggle_selection(self, row_key) -> None:
@@ -773,7 +770,7 @@ class RepoSelectionScreen(Screen):
             try:
                 all_row = table.get_row("R0")
                 if all_row[3] == "☑️":
-                    selected = [k for k in table.rows.keys() if k != "R0"]
+                    selected = [k.value for k in table.rows.keys() if k.value != "R0"]
             except Exception:
                 pass
 
