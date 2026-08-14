@@ -34,11 +34,13 @@ from repo_analysis.analyzer import (
     countLoc,
     countLexicalTokens,
     computeSimilarity,
+    computeLanguageBreakdown,
     getLlmTokens,
     classifyFile,
     isBinary,
     hashFile,
     readFileSafe,
+    processFileBatch,
     EXT_TO_LANG_MAP,
     SKIP_DIRS,
     SKIP_EXTENSIONS,
@@ -140,3 +142,21 @@ class TestAnalyzer:
         assert ".exe" in SKIP_EXTENSIONS
         assert ".jpg" in SKIP_EXTENSIONS
         assert ".json" in SKIP_EXTENSIONS
+
+    def test_processFileBatch_special_tokens(self, tmp_path):
+        """Files containing special tokens must be tokenized, not silently dropped."""
+        code_file = tmp_path / "tokens.py"
+        code_file.write_text("x = 1 <|endoftext|> <|startoftext|>")
+        results = processFileBatch([str(code_file)])
+        assert len(results) == 1
+        assert results[0]["llm_tokens"] > 0
+        assert results[0]["filepath"] == str(code_file)
+
+    def test_computeLanguageBreakdown(self):
+        """Breakdown must compute percentages without raising NameError."""
+        breakdown = computeLanguageBreakdown(["a.py", "b.js"], {"a.py": 75, "b.js": 25})
+        assert breakdown["language_count"] == 2
+        langs = {lang: info["pct"] for lang, info in breakdown["breakdown"].items()}
+        assert langs["Python"] == 75.0
+        assert langs["JavaScript"] == 25.0
+        assert breakdown["breakdown"]["Python"]["files"] == 1

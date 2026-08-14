@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`analyzer.py`** — `computeLanguageBreakdown()` no longer raises `NameError` (`total_loc` → `totalLoc`); language percentage shares now compute correctly
+- **`analyzer.py`** — files containing tiktoken special tokens (e.g. `<|endoftext|>`) are now tokenized and counted instead of being silently dropped by `processFileBatch()`
+- **`analyzer.py`** — removed the dead, shadowed first definition of `runInteractiveMode()`; the active token-prompting version is now the single source of truth
+- **`analyzer.py`** — Stage 2 / AI-detection duplication sanity checks log an error instead of raising `ValueError`, so legitimate repos no longer abort the whole run
+- **`analyzer.py`** — simplified the redundant exception handler in `runGit()` and removed the dead `except subprocess.CalledProcessError` branch in `cloneRepo()`
+- **`analyzer.py`** — `runCloc()` / `callGitLabApi()` now type their defaulted parameters as `Optional[...]` instead of implicit `None`
+- **`tui.py`** — repository selection now actually works: the "Select" column gets a proper key, space/click toggling resolves the row via `coordinate_to_cell_key()` (the previous `get_row_at()[3]` returned the checkbox text, not a row key), and the "Select All" path yields string tags instead of `RowKey` objects (previously crashed in `" ".join()`)
+- **`tui.py`** — simplified the dead `if self.from_web / else` branch in `PATInputScreen.action_go_back()`
+
+### Tests
+- Added regression tests for the special-token tokenization and language-breakdown fixes (`tests/test_analyzer.py`) and for the TUI space-key toggle and select-all behavior (`tests/test_tui.py`); suite now **26 tests** (was 22)
+
 ## [3.0.0] - 2026-08-01
 
 ### Added

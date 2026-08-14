@@ -68,3 +68,56 @@ class TestTUIModals:
         modal = ProgressModal("Working...", "Please wait")
         assert modal.title == "Working..."
         assert modal.message == "Please wait"
+
+
+class TestRepoSelectionScreen:
+    """Test cases for the repository selection screen."""
+
+    REPOS = [
+        {"name": "repo-a", "desc": "first", "url": "u1"},
+        {"name": "repo-b", "desc": "second", "url": "u2"},
+    ]
+
+    def _screen(self):
+        from repo_analysis.tui import RepoSelectionScreen
+
+        return RepoSelectionScreen(list(self.REPOS))
+
+    def test_space_toggles_cursor_row(self):
+        """Space must toggle the row under the cursor (not the checkbox cell text)."""
+        import asyncio
+
+        from textual.widgets import DataTable
+
+        async def scenario():
+            from textual.app import App
+
+            async with App().run_test() as pilot:
+                await pilot.app.push_screen(self._screen())
+                await pilot.pause()
+                table = pilot.app.screen.query_one("#repo-table", DataTable)
+                await pilot.press("space")
+                assert table.get_row("R1")[3] == "☑️"
+                await pilot.press("space")
+                assert table.get_row("R1")[3] == "☐"
+
+        asyncio.run(scenario())
+
+    def test_select_all_updates_all_rows(self):
+        """Select-all must toggle every row including the SELECT ALL row."""
+        import asyncio
+
+        from textual.widgets import DataTable
+
+        async def scenario():
+            from textual.app import App
+
+            async with App().run_test() as pilot:
+                await pilot.app.push_screen(self._screen())
+                await pilot.pause()
+                table = pilot.app.screen.query_one("#repo-table", DataTable)
+                await pilot.press("a")
+                assert table.get_row("R0")[3] == "☑️"
+                assert table.get_row("R1")[3] == "☑️"
+
+        asyncio.run(scenario())
