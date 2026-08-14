@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Repository Intelligence CLI Tool
+# Copyright (c) 2024 Repository Intelligence Team
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# ==============================================================================
+# Repository Intelligence Runner - easy launcher for the analyzer / TUI / backend
+#
+# Usage:
+#   ./run                        Interactive analyzer (prompts for input)
+#   ./run -i ./my-project --mode full
+#   ./run tui                    Launch the Textual TUI
+#   ./run backend <args...>      Run the TUI backend API helpers
+#   ./run help                   Show this help
+# ==============================================================================
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${SCRIPT_DIR}"
+cd "${PROJECT_ROOT}"
+
+if [ -x "${PROJECT_ROOT}/venv/bin/python" ]; then
+    PYTHON_BIN="${PROJECT_ROOT}/venv/bin/python"
+elif [ -x "${PROJECT_ROOT}/venv/Scripts/python.exe" ]; then
+    PYTHON_BIN="${PROJECT_ROOT}/venv/Scripts/python.exe"
+else
+    PYTHON_BIN="python3"
+fi
+
+export PYTHONPATH="${PROJECT_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  ./run [analyzer options...]   Run the CLI analyzer (interactive if no args)
+  ./run tui                     Launch the Textual TUI
+  ./run backend <args...>       Run the TUI backend API helpers
+  ./run help                    Show this help
+
+Examples:
+  ./run -i ./my-project --mode full
+  ./run -i https://github.com/user/repo.git
+  ./run tui
+EOF
+}
+
+CMD="${1:-}"
+
+case "${CMD}" in
+    help)
+        usage
+        ;;
+    tui)
+        shift
+        exec "${PYTHON_BIN}" -m repo_analysis.tui "$@"
+        ;;
+    backend)
+        shift
+        exec "${PYTHON_BIN}" -m repo_analysis.tui_backend "$@"
+        ;;
+    analyzer)
+        shift
+        exec "${PYTHON_BIN}" -m repo_analysis.analyzer "$@"
+        ;;
+    *)
+        exec "${PYTHON_BIN}" -m repo_analysis.analyzer "$@"
+        ;;
+esac

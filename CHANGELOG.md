@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Cross-platform launchers** at the repo root — `run` (bash / Linux / macOS / WSL) and `run.bat` (Windows):
+  - Auto-select the `venv/` interpreter with fallback to system `python`/`python3`
+  - Prepend `src/` to `PYTHONPATH`, so it works without `pip install -e`
+  - `run` (no args) starts the interactive analyzer; CLI args pass straight through
+  - `run tui`, `run backend <args...>`, and `run help` subcommands
+
 ### Fixed
 - **`analyzer.py`** — `computeLanguageBreakdown()` no longer raises `NameError` (`total_loc` → `totalLoc`); language percentage shares now compute correctly
 - **`analyzer.py`** — files containing tiktoken special tokens (e.g. `<|endoftext|>`) are now tokenized and counted instead of being silently dropped by `processFileBatch()`
