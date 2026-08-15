@@ -234,13 +234,23 @@ class MainMenuScreen(Screen):
             yield Static(" Repository Intelligence CLI Tool", id="title")
             yield Static("v3.0.0 — Multi-platform TUI", id="subtitle")
             yield Label("")
-            yield Button(" GitHub (User / Organization)", id="btn-github", variant="primary")
+            yield Button(" Analyze Local Repository", id="btn-local", variant="primary")
+            yield Button(" Analyze Git Repository", id="btn-git", variant="primary")
+            yield Button(" GitHub (User / Organization)", id="btn-github", variant="default")
             yield Button(
-                "  Azure DevOps (Organization / Project)", id="btn-azure", variant="primary"
+                " Azure DevOps (Organization / Project)", id="btn-azure", variant="default"
             )
             yield Button(" Summarize High-Rating Repositories", id="btn-summary", variant="default")
             yield Button(" Exit", id="btn-exit", variant="error")
         yield Footer()
+
+    @on(Button.Pressed, "#btn-local")
+    def on_local(self) -> None:
+        self.app.push_screen(DirectInputScreen("local"))
+
+    @on(Button.Pressed, "#btn-git")
+    def on_git(self) -> None:
+        self.app.push_screen(DirectInputScreen("git"))
 
     @on(Button.Pressed, "#btn-github")
     def on_github(self) -> None:
@@ -257,6 +267,74 @@ class MainMenuScreen(Screen):
     @on(Button.Pressed, "#btn-exit")
     def on_exit(self) -> None:
         self.app.exit()
+
+
+class DirectInputScreen(Screen):
+    """Screen for entering a local path or git URL."""
+
+    BINDINGS = [
+        Binding("escape", "go_back", "Back"),
+    ]
+
+    def __init__(self, mode: str):
+        super().__init__()
+        self.mode = mode
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Container(id="target-input"):
+            if self.mode == "local":
+                yield Static(" Analyze Local Repository", id="screen-title")
+                yield Label("Enter local repository directory path:")
+                yield Input(placeholder="C:\\path\\to\\repo...", id="target-input")
+            else:
+                yield Static(" Analyze Git Repository", id="screen-title")
+                yield Label("Enter Git repository URL:")
+                yield Input(placeholder="https://github.com/...", id="target-input")
+            with Horizontal(id="nav-buttons"):
+                yield Button("← Back", id="btn-back", variant="default")
+                yield Button("Analyze →", id="btn-continue", variant="primary")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#target-input", Input).focus()
+
+    @on(Button.Pressed, "#btn-back")
+    def action_go_back(self) -> None:
+        self.app.pop_screen()
+
+    @on(Button.Pressed, "#btn-continue")
+    @on(Input.Submitted, "#target-input")
+    def on_continue(self) -> None:
+        val = self.query_one("#target-input", Input).value.strip().strip('"').strip("'")
+        if not val:
+            self.app.push_screen(MessageModal("Please enter a valid path or URL.", "Error"))
+            return
+
+        if self.mode == "local" and not os.path.isdir(val):
+            self.app.push_screen(MessageModal("Directory does not exist.", "Error"))
+            return
+        elif self.mode == "git" and not (val.startswith("http") or val.startswith("git@")):
+            self.app.push_screen(MessageModal("Invalid Git URL.", "Error"))
+            return
+
+        # Write to map and skip selection
+        mapping = {
+            "R0": {"name": "SELECT ALL", "url": "ALL", "desc": "ALL"},
+            "R1": {
+                "name": os.path.basename(val.rstrip("/").replace(".git", "")),
+                "url": val,
+                "desc": "Direct analysis",
+            },
+        }
+        REPO_MAP_FILE.write_text(json.dumps(mapping, indent=2))
+
+        self.app.selected_tags = "R1"  # type: ignore
+        self.app.push_screen(
+            BatchAnalysisScreen(
+                provider=self.mode, target=val, token=None, visibility="all", selected_tags=["R1"]
+            )
+        )
 
 
 class TargetInputScreen(Screen):
@@ -833,12 +911,11 @@ class RepoSelectionScreen(Screen):
             return
 
         self.app.selected_tags = " ".join(selected)  # type: ignore
+        # fmt: off
         self.app.push_screen(
-            BatchAnalysisScreen(
-                self.app.provider, self.app.target, self.app.token, self.app.visibility, selected  # type: ignore
-            )
-        )  # type: ignore
-
+            BatchAnalysisScreen(self.app.provider, self.app.target, self.app.token, self.app.visibility, selected)  # type: ignore
+        )
+        # fmt: on
 
 class BatchAnalysisScreen(Screen):
     """Screen showing batch analysis progress."""

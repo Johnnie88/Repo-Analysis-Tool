@@ -4795,6 +4795,7 @@ def runAnalysis(args: argparse.Namespace) -> bool:
         if isUrl and os.path.exists(targetDir):
             try:
                 import shutil
+
                 shutil.rmtree(targetDir, ignore_errors=True)
                 logger.info(f"[runAnalysis] Cleaned up cloned repository: {targetDir}")
             except Exception as e:
