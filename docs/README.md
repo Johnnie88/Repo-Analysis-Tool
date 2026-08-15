@@ -2,7 +2,7 @@
 
 A high-performance, multi-stage static analysis pipeline designed to transform raw codebases into actionable intelligence. This tool performs deep analysis on Git metadata, code metrics, architectural patterns, and security risks.
 
-## 🛠️ Setup & Requirements
+##  Setup & Requirements
 
 ### 1. Python Environment
 
@@ -71,7 +71,7 @@ cloc --version
 
 Ensure `git` is installed and available in your terminal so the tool can clone remote repositories and analyze commit history.
 
-## 📖 Usage
+##  Usage
 
 ### Cross-Platform TUI (Recommended)
 
@@ -127,7 +127,7 @@ python -m repo_analysis.tui_backend fetch-repos --provider github --target myorg
 python -m repo_analysis.tui_backend summarize-rating --output-dir ./outputs --format text
 ```
 
-## 🚀 Key Features
+##  Key Features
 
 ### 1. Multi-Stage Analysis Pipeline
 
@@ -176,7 +176,7 @@ Modern terminal UI using Textual framework:
 - **After analysis**: Removes cloned repositories (`cloned_repos/`) and temporary files (`batch_repos.txt`, `.tui_repo_map.json`)
 - **On quit**: Same cleanup runs on Ctrl+C
 
-## 📊 Outputs
+##  Outputs
 
 The tool generates professional-grade reports in the `./outputs` folder:
 
@@ -184,7 +184,7 @@ The tool generates professional-grade reports in the `./outputs` folder:
 2. **`summary_metadata.csv`**: Curated metadata report for executive review.
 3. **`{repo}_report.json`**: Deep-dive technical breakdown for each analyzed repository.
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 Repo-Analysis-Tool/
@@ -209,7 +209,7 @@ Repo-Analysis-Tool/
 └── CHANGELOG.md
 ```
 
-## 🧪 Development
+##  Development
 
 ### Run Tests
 
@@ -231,6 +231,6 @@ ruff format --check src/ tests/
 mypy src/
 ```
 
-## 📝 License
+##  License
 
 MIT License — Developed for Advanced Repository Intelligence & Technical Auditing.

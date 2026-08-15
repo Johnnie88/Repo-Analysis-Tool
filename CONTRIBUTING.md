@@ -1,6 +1,6 @@
 # Contributing Guide
 
-Thank you for contributing to the Repository Intelligence CLI Tool! This guide covers best practices for development, testing, and submitting changes.
+Thank you for contributing to the Repository Intelligence CLI Tool! This guide covers best practices for development, testing, and submitting changes. Please review our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 ## Development Setup
 

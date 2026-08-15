@@ -21,29 +21,25 @@
 
 """Tests for the analyzer module."""
 
-import pytest
-import tempfile
-import os
-from pathlib import Path
-
 # Import the analyzer module
 import sys
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from repo_analysis.analyzer import (
-    countLoc,
-    countLexicalTokens,
-    computeSimilarity,
-    computeLanguageBreakdown,
-    getLlmTokens,
-    classifyFile,
-    isBinary,
-    hashFile,
-    readFileSafe,
-    processFileBatch,
     EXT_TO_LANG_MAP,
     SKIP_DIRS,
     SKIP_EXTENSIONS,
+    classifyFile,
+    computeLanguageBreakdown,
+    computeSimilarity,
+    countLexicalTokens,
+    countLoc,
+    hashFile,
+    isBinary,
+    processFileBatch,
+    readFileSafe,
 )
 
 

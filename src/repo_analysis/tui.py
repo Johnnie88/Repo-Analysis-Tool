@@ -32,22 +32,27 @@ import subprocess
 import sys
 import webbrowser
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Dict, List, Optional
 
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import (
-    Button, Checkbox, DataTable, Footer, Header, Input, Label,
-    ListItem, ListView, Markdown, ProgressBar, RadioButton, RadioSet,
-    RichLog, Select, Static, TabbedContent, TabPane, TextArea
-)
-from textual.screen import Screen, ModalScreen
-from textual.message import Message
-from textual.reactive import reactive
+from textual.containers import Container, Horizontal
 from textual.events import Key
-from rich.text import Text
+from textual.screen import ModalScreen, Screen
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    Label,
+    ProgressBar,
+    RadioButton,
+    RadioSet,
+    RichLog,
+    Static,
+)
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent.parent  # Go up to v1.0 root
@@ -74,20 +79,24 @@ SENSITIVE_ENV_VARS = [
     "AZURE_PAT",
 ]
 
+
 def clear_sensitive_env() -> None:
     """Clear sensitive environment variables at startup to prevent leaks."""
     for var in SENSITIVE_ENV_VARS:
         if var in os.environ:
             del os.environ[var]
 
+
 def cleanup_cloned_repos() -> None:
     """Remove all cloned repositories after analysis."""
     if CLONE_DIR.exists():
         import shutil
+
         try:
             shutil.rmtree(CLONE_DIR)
         except Exception:
             pass
+
 
 def cleanup_batch_files() -> None:
     """Remove temporary batch files."""
@@ -109,7 +118,7 @@ class ConfirmModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Container(id="confirm-dialog"):
-            yield Label(self.title, id="confirm-title")
+            yield Label(self.title or "Confirm", id="confirm-title")
             yield Label(self.message, id="confirm-message")
             with Horizontal(id="confirm-buttons"):
                 yield Button("Yes", variant="primary", id="yes-btn")
@@ -134,7 +143,7 @@ class MessageModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Container(id="message-dialog"):
-            yield Label(self.title, id="message-title")
+            yield Label(self.title or "Message", id="message-title")
             yield Label(self.message, id="message-text")
             yield Button("OK", variant="primary", id="ok-btn")
 
@@ -146,7 +155,9 @@ class MessageModal(ModalScreen[None]):
 class InputModal(ModalScreen[Optional[str]]):
     """Modal dialog for text input."""
 
-    def __init__(self, prompt: str, title: str = "Input", default: str = "", password: bool = False):
+    def __init__(
+        self, prompt: str, title: str = "Input", default: str = "", password: bool = False
+    ):
         super().__init__()
         self.prompt = prompt
         self.title = title
@@ -155,13 +166,13 @@ class InputModal(ModalScreen[Optional[str]]):
 
     def compose(self) -> ComposeResult:
         with Container(id="input-dialog"):
-            yield Label(self.title, id="input-title")
+            yield Label(self.title or "Input", id="input-title")
             yield Label(self.prompt, id="input-prompt")
             yield Input(
                 value=self.default,
                 password=self.password,
                 id="input-field",
-                placeholder="Enter value..."
+                placeholder="Enter value...",
             )
             with Horizontal(id="input-buttons"):
                 yield Button("OK", variant="primary", id="ok-btn")
@@ -194,12 +205,12 @@ class ProgressModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Container(id="progress-dialog"):
-            yield Label(self.title, id="progress-title")
+            yield Label(self.title or "Working...", id="progress-title")
             yield Label(self.message, id="progress-message")
             yield ProgressBar(id="progress-bar", show_eta=False)
             yield RichLog(id="progress-log", markup=True, highlight=True)
 
-    def update_progress(self, message: str, progress: float = None) -> None:
+    def update_progress(self, message: str, progress: float = None) -> None:  # type: ignore
         log = self.query_one("#progress-log", RichLog)
         log.write(message)
         if progress is not None:
@@ -220,13 +231,15 @@ class MainMenuScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="main-menu"):
-            yield Static("🔍 Repository Intelligence CLI Tool", id="title")
+            yield Static(" Repository Intelligence CLI Tool", id="title")
             yield Static("v3.0.0 — Multi-platform TUI", id="subtitle")
             yield Label("")
-            yield Button("🐙 GitHub (User / Organization)", id="btn-github", variant="primary")
-            yield Button("☁️  Azure DevOps (Organization / Project)", id="btn-azure", variant="primary")
-            yield Button("📊 Summarize High-Rating Repositories", id="btn-summary", variant="default")
-            yield Button("❌ Exit", id="btn-exit", variant="error")
+            yield Button(" GitHub (User / Organization)", id="btn-github", variant="primary")
+            yield Button(
+                "  Azure DevOps (Organization / Project)", id="btn-azure", variant="primary"
+            )
+            yield Button(" Summarize High-Rating Repositories", id="btn-summary", variant="default")
+            yield Button(" Exit", id="btn-exit", variant="error")
         yield Footer()
 
     @on(Button.Pressed, "#btn-github")
@@ -260,7 +273,7 @@ class TargetInputScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="target-input"):
-            yield Static(f"🎯 {self.provider.capitalize()} Target Selection", id="screen-title")
+            yield Static(f" {self.provider.capitalize()} Target Selection", id="screen-title")
             yield Label("")
             if self.provider == "github":
                 yield Label("Enter GitHub Username or Organization Name:")
@@ -268,11 +281,7 @@ class TargetInputScreen(Screen):
             else:
                 yield Label("Enter Azure DevOps Organization Name:")
                 yield Label("(e.g., my-company-org)", id="hint")
-            yield Input(
-                placeholder="Enter name...",
-                id="target-input",
-                value=""
-            )
+            yield Input(placeholder="Enter name...", id="target-input", value="")
             with Horizontal(id="nav-buttons"):
                 yield Button("← Back", id="btn-back", variant="default")
                 yield Button("Continue →", id="btn-continue", variant="primary")
@@ -311,15 +320,15 @@ class AuthScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="auth-screen"):
-            yield Static(f"🔐 {self.provider.capitalize()} Authentication", id="screen-title")
+            yield Static(f" {self.provider.capitalize()} Authentication", id="screen-title")
             yield Label("")
             yield Label(f"Target: {self.target}", id="target-label")
             yield Label("")
             yield RadioSet(
-                RadioButton("🌐 Web Login (Open browser to generate PAT)", id="auth-web", value=True),
-                RadioButton("🔑 Enter Existing Personal Access Token (PAT)", id="auth-pat"),
-                RadioButton("👤 Anonymous / Public Repos Only (No Token)", id="auth-anon"),
-                id="auth-options"
+                RadioButton(" Web Login (Open browser to generate PAT)", id="auth-web", value=True),
+                RadioButton(" Enter Existing Personal Access Token (PAT)", id="auth-pat"),
+                RadioButton(" Anonymous / Public Repos Only (No Token)", id="auth-anon"),
+                id="auth-options",
             )
             with Horizontal(id="nav-buttons"):
                 yield Button("← Back", id="btn-back", variant="default")
@@ -339,7 +348,7 @@ class AuthScreen(Screen):
         elif selected == 1:  # PAT entry
             self.app.push_screen(PATInputScreen(self.provider, self.target))
         else:  # Anonymous
-            self.app.token = None
+            self.app.token = None  # type: ignore
             self.app.push_screen(VisibilityScreen(self.provider, self.target, None))
 
 
@@ -358,38 +367,51 @@ class WebLoginScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="web-login"):
-            yield Static(f"🌐 Web Login - {self.provider.capitalize()}", id="screen-title")
+            yield Static(f" Web Login - {self.provider.capitalize()}", id="screen-title")
             yield Label("")
             yield Label("Opening browser to generate token...", id="status-label")
             yield Label("", id="url-label")
             yield Label("")
-            yield Label("After generating token in browser, click Continue and paste it.", id="hint")
+            yield Label(
+                "After generating token in browser, click Continue and paste it.", id="hint"
+            )
             with Horizontal(id="nav-buttons"):
                 yield Button("← Back", id="btn-back", variant="default")
                 yield Button("Continue →", id="btn-continue", variant="primary")
         yield Footer()
 
     def on_mount(self) -> None:
-        self.run_worker(self.generate_url())
+        self.run_worker(self.generate_url())  # type: ignore
 
     @work(exclusive=True)
     async def generate_url(self) -> None:
         try:
             result = subprocess.run(
-                [str(PYTHON_BIN), str(TUI_BACKEND), "get-url",
-                 "--provider", self.provider, "--org", self.target],
-                capture_output=True, text=True, timeout=10
+                [
+                    str(PYTHON_BIN),
+                    str(TUI_BACKEND),
+                    "get-url",
+                    "--provider",
+                    self.provider,
+                    "--org",
+                    self.target,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0:
                 url = result.stdout.strip()
                 self.url = url
                 self.query_one("#url-label", Label).update(f"URL: {url}")
-                self.query_one("#status-label", Label).update("✅ Browser opened. Generate token and return here.")
+                self.query_one("#status-label", Label).update(
+                    " Browser opened. Generate token and return here."
+                )
                 webbrowser.open(url)
             else:
-                self.query_one("#status-label", Label).update(f"❌ Error: {result.stderr}")
+                self.query_one("#status-label", Label).update(f" Error: {result.stderr}")
         except Exception as e:
-            self.query_one("#status-label", Label).update(f"❌ Error: {e}")
+            self.query_one("#status-label", Label).update(f" Error: {e}")
 
     @on(Button.Pressed, "#btn-back")
     def action_go_back(self) -> None:
@@ -416,17 +438,13 @@ class PATInputScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="pat-input"):
-            yield Static(f"🔑 Enter PAT - {self.provider.capitalize()}", id="screen-title")
+            yield Static(f" Enter PAT - {self.provider.capitalize()}", id="screen-title")
             yield Label("")
             if self.from_web:
                 yield Label("Paste the token you generated in the browser:", id="prompt")
             else:
                 yield Label("Enter your Personal Access Token:", id="prompt")
-            yield Input(
-                placeholder="Paste token here...",
-                password=True,
-                id="pat-input"
-            )
+            yield Input(placeholder="Paste token here...", password=True, id="pat-input")
             yield Label("")
             yield Label("Token will be masked and stored only for this session.", id="hint")
             with Horizontal(id="nav-buttons"):
@@ -448,7 +466,7 @@ class PATInputScreen(Screen):
         if not token:
             self.app.push_screen(MessageModal("Token cannot be empty.", "Error"))
             return
-        self.app.token = token
+        self.app.token = token  # type: ignore
         self.app.push_screen(VisibilityScreen(self.provider, self.target, token))
 
 
@@ -468,16 +486,20 @@ class VisibilityScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="visibility-screen"):
-            yield Static(f"👁️ Repository Visibility - {self.provider.capitalize()}", id="screen-title")
+            yield Static(
+                f" Repository Visibility - {self.provider.capitalize()}", id="screen-title"
+            )
             yield Label("")
             yield Label(f"Target: {self.target}", id="target-label")
-            yield Label(f"Auth: {'✅ Token provided' if self.token else '❌ Anonymous'}", id="auth-label")
+            yield Label(
+                f"Auth: {' Token provided' if self.token else ' Anonymous'}", id="auth-label"
+            )
             yield Label("")
             yield RadioSet(
-                RadioButton("📂 All Repositories (Public + Private)", id="vis-all", value=True),
-                RadioButton("🌍 Public Repositories Only", id="vis-public"),
-                RadioButton("🔒 Private Repositories Only", id="vis-private"),
-                id="vis-options"
+                RadioButton(" All Repositories (Public + Private)", id="vis-all", value=True),
+                RadioButton(" Public Repositories Only", id="vis-public"),
+                RadioButton(" Private Repositories Only", id="vis-private"),
+                id="vis-options",
             )
             yield Label("", id="warning-label")
             with Horizontal(id="nav-buttons"):
@@ -496,12 +518,14 @@ class VisibilityScreen(Screen):
 
         warning = ""
         if not self.token and visibility == "private":
-            warning = "⚠️ Private repositories require authentication. Falling back to Public only."
+            warning = " Private repositories require authentication. Falling back to Public only."
         elif self.provider == "github" and visibility == "private" and self.token:
             if self.target.lower() not in ("me", "self", "@me"):
-                warning = ("ℹ️ Note: For GitHub, private repos are only accessible for:\n"
-                           "  - Your own account (use 'me' as target)\n"
-                           "  - Organizations you have admin access to (with token)")
+                warning = (
+                    "ℹ Note: For GitHub, private repos are only accessible for:\n"
+                    "  - Your own account (use 'me' as target)\n"
+                    "  - Organizations you have admin access to (with token)"
+                )
         self.query_one("#warning-label", Label).update(warning)
 
     @on(Button.Pressed, "#btn-back")
@@ -517,7 +541,7 @@ class VisibilityScreen(Screen):
         if not self.token and visibility == "private":
             visibility = "public"
 
-        self.app.visibility = visibility
+        self.app.visibility = visibility  # type: ignore
         self.app.push_screen(ValidationScreen(self.provider, self.target, self.token, visibility))
 
 
@@ -534,7 +558,9 @@ class ValidationScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="validation-screen"):
-            yield Static(f"✅ Validating {self.provider.capitalize()} Organization", id="screen-title")
+            yield Static(
+                f" Validating {self.provider.capitalize()} Organization", id="screen-title"
+            )
             yield Label("")
             yield Label(f"Target: {self.target}", id="target-label")
             yield Label(f"Visibility: {self.visibility}", id="vis-label")
@@ -543,44 +569,57 @@ class ValidationScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.run_worker(self.validate())
+        self.run_worker(self.validate())  # type: ignore
 
     @work(exclusive=True)
     async def validate(self) -> None:
         log = self.query_one("#validation-log", RichLog)
         log.write(f"[bold]Validating {self.provider.capitalize()} target: {self.target}[/bold]")
 
-        cmd = [str(PYTHON_BIN), str(TUI_BACKEND), "check-company",
-               "--provider", self.provider, "--target", self.target]
+        cmd = [
+            str(PYTHON_BIN),
+            str(TUI_BACKEND),
+            "check-company",
+            "--provider",
+            self.provider,
+            "--target",
+            self.target,
+        ]
         if self.token:
             cmd.extend(["--token", self.token])
 
         try:
             process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
 
             output = stdout.decode() + stderr.decode()
 
             if output.startswith("EXISTS:"):
-                log.write(f"[green]✅ {output[7:]}[/green]")
+                log.write(f"[green] {output[7:]}[/green]")
                 await asyncio.sleep(0.5)
-                self.app.push_screen(RepoFetchScreen(self.provider, self.target, self.token, self.visibility))
+                self.app.push_screen(
+                    RepoFetchScreen(self.provider, self.target, self.token, self.visibility)
+                )
             elif output.startswith("NOT_FOUND:"):
-                log.write(f"[red]❌ {output[10:]}[/red]")
+                log.write(f"[red] {output[10:]}[/red]")
                 await asyncio.sleep(1)
-                self.app.push_screen(MessageModal(output[10:], "Validation Failed"), callback=self.on_modal_dismiss)
+                self.app.push_screen(
+                    MessageModal(output[10:], "Validation Failed"), callback=self.on_modal_dismiss
+                )
             else:
-                log.write(f"[yellow]⚠️ Unexpected response: {output}[/yellow]")
+                log.write(f"[yellow] Unexpected response: {output}[/yellow]")
                 await asyncio.sleep(1)
-                self.app.push_screen(RepoFetchScreen(self.provider, self.target, self.token, self.visibility))
+                self.app.push_screen(
+                    RepoFetchScreen(self.provider, self.target, self.token, self.visibility)
+                )
         except Exception as e:
-            log.write(f"[red]❌ Validation error: {e}[/red]")
+            log.write(f"[red] Validation error: {e}[/red]")
             await asyncio.sleep(1)
-            self.app.push_screen(RepoFetchScreen(self.provider, self.target, self.token, self.visibility))
+            self.app.push_screen(
+                RepoFetchScreen(self.provider, self.target, self.token, self.visibility)
+            )
 
     def on_modal_dismiss(self, result: None) -> None:
         self.app.pop_screen()
@@ -600,7 +639,9 @@ class RepoFetchScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="fetch-screen"):
-            yield Static(f"📦 Fetching Repositories - {self.provider.capitalize()}", id="screen-title")
+            yield Static(
+                f" Fetching Repositories - {self.provider.capitalize()}", id="screen-title"
+            )
             yield Label("")
             yield Label(f"Target: {self.target}", id="target-label")
             yield Label(f"Visibility: {self.visibility}", id="vis-label")
@@ -610,7 +651,7 @@ class RepoFetchScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.run_worker(self.fetch_repos())
+        self.run_worker(self.fetch_repos())  # type: ignore
 
     @work(exclusive=True)
     async def fetch_repos(self) -> None:
@@ -619,22 +660,30 @@ class RepoFetchScreen(Screen):
 
         log.write(f"[bold]Fetching repositories for {self.target}...[/bold]")
 
-        cmd = [str(PYTHON_BIN), str(TUI_BACKEND), "fetch-repos",
-               "--provider", self.provider, "--target", self.target,
-               "--visibility", self.visibility, "--format", "json"]
+        cmd = [
+            str(PYTHON_BIN),
+            str(TUI_BACKEND),
+            "fetch-repos",
+            "--provider",
+            self.provider,
+            "--target",
+            self.target,
+            "--visibility",
+            self.visibility,
+            "--format",
+            "json",
+        ]
         if self.token:
             cmd.extend(["--token", self.token])
 
         try:
             process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
 
             if process.returncode != 0:
-                log.write(f"[red]❌ Fetch failed: {stderr.decode()}[/red]")
+                log.write(f"[red] Fetch failed: {stderr.decode()}[/red]")
                 await asyncio.sleep(2)
                 self.app.pop_screen()
                 return
@@ -647,20 +696,23 @@ class RepoFetchScreen(Screen):
             mapping.update({f"R{idx}": r for idx, r in enumerate(self.repos, 1)})
             REPO_MAP_FILE.write_text(json.dumps(mapping, indent=2))
 
-            log.write(f"[green]✅ Fetched {len(self.repos)} repositories[/green]")
+            log.write(f"[green] Fetched {len(self.repos)} repositories[/green]")
             progress.update(progress=100)
             await asyncio.sleep(0.5)
 
             if not self.repos:
-                self.app.push_screen(MessageModal(
-                    f"No repositories found for '{self.target}'.\n\nPlease check the target name or token permissions.",
-                    "No Repositories Found"
-                ), callback=self.on_modal_dismiss)
+                self.app.push_screen(
+                    MessageModal(
+                        f"No repositories found for '{self.target}'.\n\nPlease check the target name or token permissions.",
+                        "No Repositories Found",
+                    ),
+                    callback=self.on_modal_dismiss,
+                )
             else:
                 self.app.push_screen(RepoSelectionScreen(self.repos))
 
         except Exception as e:
-            log.write(f"[red]❌ Fetch error: {e}[/red]")
+            log.write(f"[red] Fetch error: {e}[/red]")
             await asyncio.sleep(2)
             self.app.pop_screen()
 
@@ -684,11 +736,13 @@ class RepoSelectionScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="selection-screen"):
-            yield Static(f"☑️ Select Repositories to Analyze ({len(self.repos)} found)", id="screen-title")
+            yield Static(
+                f" Select Repositories to Analyze ({len(self.repos)} found)", id="screen-title"
+            )
             yield Label("")
             with Horizontal(id="selection-actions"):
-                yield Button("☑️ Select All", id="btn-select-all", variant="default")
-                yield Button("☐ Select None", id="btn-select-none", variant="default")
+                yield Button(" Select All", id="btn-select-all", variant="default")
+                yield Button(" Select None", id="btn-select-none", variant="default")
             yield Label("")
             yield DataTable(id="repo-table", cursor_type="row", zebra_stripes=True)
             yield Label("")
@@ -706,10 +760,10 @@ class RepoSelectionScreen(Screen):
                 str(idx),
                 repo["name"],
                 repo["desc"][:80] + ("..." if len(repo["desc"]) > 80 else ""),
-                "☐",
-                key=f"R{idx}"
+                "[ ]",
+                key=f"R{idx}",
             )
-        table.add_row("0", "=== SELECT ALL ===", "All repositories", "☐", key="R0")
+        table.add_row("0", "=== SELECT ALL ===", "All repositories", "[ ]", key="R0")
         table.focus()
 
     @on(DataTable.CellSelected, "#repo-table")
@@ -729,7 +783,7 @@ class RepoSelectionScreen(Screen):
         try:
             row = table.get_row(row_key)
             current = row[3]
-            new = "☑️" if current == "☐" else "☐"
+            new = "[X]" if current == "[ ]" else "[ ]"
             table.update_cell(row_key, "Select", new)
         except Exception:
             pass
@@ -737,12 +791,12 @@ class RepoSelectionScreen(Screen):
     def action_select_all(self) -> None:
         table = self.query_one("#repo-table", DataTable)
         for row_key in table.rows.keys():
-            table.update_cell(row_key, "Select", "☑️")
+            table.update_cell(row_key, "Select", "[X]")
 
     def action_select_none(self) -> None:
         table = self.query_one("#repo-table", DataTable)
         for row_key in table.rows.keys():
-            table.update_cell(row_key, "Select", "☐")
+            table.update_cell(row_key, "Select", "[ ]")
 
     @on(Button.Pressed, "#btn-select-all")
     def on_select_all(self) -> None:
@@ -762,14 +816,14 @@ class RepoSelectionScreen(Screen):
         selected = []
         for row_key in table.rows.keys():
             row = table.get_row(row_key)
-            if row[3] == "☑️" and row_key.value != "R0":
+            if row[3] == "[X]" and row_key.value != "R0":
                 selected.append(row_key.value)
 
         if not selected:
             # Check if "SELECT ALL" is selected
             try:
                 all_row = table.get_row("R0")
-                if all_row[3] == "☑️":
+                if all_row[3] == "[X]":
                     selected = [k.value for k in table.rows.keys() if k.value != "R0"]
             except Exception:
                 pass
@@ -778,14 +832,25 @@ class RepoSelectionScreen(Screen):
             self.app.push_screen(MessageModal("No repositories selected for analysis.", "Error"))
             return
 
-        self.app.selected_tags = " ".join(selected)
-        self.app.push_screen(BatchAnalysisScreen(self.app.provider, self.app.target, self.app.token, self.app.visibility, selected))
+        self.app.selected_tags = " ".join(selected)  # type: ignore
+        self.app.push_screen(
+            BatchAnalysisScreen(
+                self.app.provider, self.app.target, self.app.token, self.app.visibility, selected  # type: ignore
+            )
+        )  # type: ignore
 
 
 class BatchAnalysisScreen(Screen):
     """Screen showing batch analysis progress."""
 
-    def __init__(self, provider: str, target: str, token: Optional[str], visibility: str, selected_tags: List[str]):
+    def __init__(
+        self,
+        provider: str,
+        target: str,
+        token: Optional[str],
+        visibility: str,
+        selected_tags: List[str],
+    ):
         super().__init__()
         self.provider = provider
         self.target = target
@@ -797,7 +862,7 @@ class BatchAnalysisScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="batch-screen"):
-            yield Static("🚀 Batch Analysis Running", id="screen-title")
+            yield Static(" Batch Analysis Running", id="screen-title")
             yield Label("")
             yield Label(f"Provider: {self.provider.capitalize()}", id="provider-label")
             yield Label(f"Target: {self.target}", id="target-label")
@@ -808,7 +873,7 @@ class BatchAnalysisScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.run_worker(self.run_analysis())
+        self.run_worker(self.run_analysis())  # type: ignore
 
     @work(exclusive=True)
     async def run_analysis(self) -> None:
@@ -816,30 +881,34 @@ class BatchAnalysisScreen(Screen):
         progress = self.query_one("#batch-progress", ProgressBar)
 
         # Resolve selected tags to batch file
-        cmd = [str(PYTHON_BIN), str(TUI_BACKEND), "resolve-selected",
-               "--tags", " ".join(self.selected_tags), "--out", str(BATCH_FILE)]
+        cmd = [
+            str(PYTHON_BIN),
+            str(TUI_BACKEND),
+            "resolve-selected",
+            "--tags",
+            " ".join(self.selected_tags),
+            "--out",
+            str(BATCH_FILE),
+        ]
 
         log.write("[bold]Resolving selected repositories...[/bold]")
         process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
-            log.write(f"[red]❌ Resolve failed: {stderr.decode()}[/red]")
+            log.write(f"[red] Resolve failed: {stderr.decode()}[/red]")
             return
 
         output = stdout.decode().strip()
         if output.startswith("SAVED:"):
             count = int(output.split(":")[1])
-            log.write(f"[green]✅ {count} repositories saved to batch file[/green]")
+            log.write(f"[green] {count} repositories saved to batch file[/green]")
 
         # Run batch analysis
         log.write("[bold]Starting batch analysis...[/bold]")
-        cmd = [str(PYTHON_BIN), str(ANALYZER),
-               "--batch", str(BATCH_FILE), "-o", str(OUTPUT_DIR)]
+        cmd = [str(PYTHON_BIN), str(ANALYZER), "--batch", str(BATCH_FILE), "-o", str(OUTPUT_DIR)]
         if self.token:
             if self.provider == "github":
                 cmd.extend(["--github-token", self.token])
@@ -850,14 +919,12 @@ class BatchAnalysisScreen(Screen):
 
         try:
             self.process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
             )
 
             # Read output line by line
             line_count = 0
-            async for line in self.process.stdout:
+            async for line in self.process.stdout:  # type: ignore
                 line_count += 1
                 decoded = line.decode(errors="replace").rstrip()
                 if decoded:
@@ -866,22 +933,24 @@ class BatchAnalysisScreen(Screen):
             await self.process.wait()
 
             if self.process.returncode == 0:
-                log.write("[green]✅ Batch analysis completed successfully![/green]")
+                log.write("[green] Batch analysis completed successfully![/green]")
                 progress.update(progress=100)
                 await asyncio.sleep(1)
-                
+
                 # Cleanup: remove cloned repos and temporary files
                 log.write("[bold]Cleaning up temporary files...[/bold]")
                 cleanup_cloned_repos()
                 cleanup_batch_files()
-                log.write("[green]✅ Cleanup complete[/green]")
-                
+                log.write("[green] Cleanup complete[/green]")
+
                 self.app.push_screen(SummaryScreen(auto_show=True))
             else:
-                log.write(f"[red]❌ Batch analysis failed with exit code {self.process.returncode}[/red]")
+                log.write(
+                    f"[red] Batch analysis failed with exit code {self.process.returncode}[/red]"
+                )
 
         except Exception as e:
-            log.write(f"[red]❌ Error running analysis: {e}[/red]")
+            log.write(f"[red] Error running analysis: {e}[/red]")
 
     def on_unmount(self) -> None:
         if self.process and self.process.returncode is None:
@@ -903,30 +972,35 @@ class SummaryScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="summary-screen"):
-            yield Static("📊 High-Rating Repositories Summary", id="screen-title")
+            yield Static(" High-Rating Repositories Summary", id="screen-title")
             yield Label("")
             yield RichLog(id="summary-log", markup=True, highlight=True, wrap=True)
             yield Label("")
             with Horizontal(id="nav-buttons"):
                 yield Button("← Back to Menu", id="btn-back", variant="default")
-                yield Button("🔄 Refresh", id="btn-refresh", variant="primary")
+                yield Button(" Refresh", id="btn-refresh", variant="primary")
         yield Footer()
 
     def on_mount(self) -> None:
-        self.run_worker(self.load_summary())
+        self.run_worker(self.load_summary())  # type: ignore
 
     @work(exclusive=True)
     async def load_summary(self) -> None:
         log = self.query_one("#summary-log", RichLog)
 
-        cmd = [str(PYTHON_BIN), str(TUI_BACKEND), "summarize-rating",
-               "--output-dir", str(OUTPUT_DIR), "--format", "text"]
+        cmd = [
+            str(PYTHON_BIN),
+            str(TUI_BACKEND),
+            "summarize-rating",
+            "--output-dir",
+            str(OUTPUT_DIR),
+            "--format",
+            "text",
+        ]
 
         try:
             process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
 
@@ -946,7 +1020,7 @@ class SummaryScreen(Screen):
 
     @on(Button.Pressed, "#btn-refresh")
     def action_refresh(self) -> None:
-        self.run_worker(self.load_summary())
+        self.run_worker(self.load_summary())  # type: ignore
 
 
 class RepoAnalysisApp(App):
@@ -1072,7 +1146,7 @@ class RepoAnalysisApp(App):
         clear_sensitive_env()
         self.push_screen(MainMenuScreen())
 
-    def action_quit(self) -> None:
+    def action_quit(self) -> None:  # type: ignore
         cleanup_cloned_repos()
         cleanup_batch_files()
         self.exit()

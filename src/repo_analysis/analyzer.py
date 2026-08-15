@@ -19,61 +19,63 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import os
-import sys
-import json
-import csv
 import argparse
+import base64
+import csv
+import datetime
 import hashlib
-import re
-import subprocess
-import time
+import json
 import logging
 import multiprocessing
+import os
+import re
+import subprocess
+import sys
 import threading
-import datetime
-import uuid
-import base64
+import time
 import urllib.request
+import uuid
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    import psutil
+    import psutil  # type: ignore
+
     HAS_PSUTIL = True
 except ImportError:
     HAS_PSUTIL = False
 
 try:
-    from github import Github, RateLimitExceededException, GithubException
+    from github import Github, GithubException, RateLimitExceededException
+
     HAS_PYGITHUB = True
 except ImportError:
     HAS_PYGITHUB = False
 
-    class GithubException(Exception):
+    class GithubException(Exception):  # type: ignore
         pass
 
-    class RateLimitExceededException(GithubException):
+    class RateLimitExceededException(GithubException):  # type: ignore
         pass
 
-    class Github:
+    class Github:  # type: ignore
         pass
+
 
 CSV_LOCK = threading.Lock()
 
 try:
     import tiktoken
+
     HAS_TIKTOKEN = True
     ENCODING = tiktoken.get_encoding("cl100k_base")
 except ImportError:
     HAS_TIKTOKEN = False
-    ENCODING = None
+    ENCODING = None  # type: ignore
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S"
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
 )
 logger = logging.getLogger(__name__)
 
@@ -110,7 +112,9 @@ def setup_organized_logging(output_dir: str = "./outputs", verbose: bool = True)
     run_id = uuid.uuid4().hex[:8]
 
     verbose_log_file = os.path.join(verbose_dir, f"repo_analysis_verbose_{timestamp}_{run_id}.log")
-    execution_log_file = os.path.join(execution_dir, f"repo_analysis_execution_{timestamp}_{run_id}.log")
+    execution_log_file = os.path.join(
+        execution_dir, f"repo_analysis_execution_{timestamp}_{run_id}.log"
+    )
     errors_log_file = os.path.join(errors_dir, f"repo_analysis_errors_{timestamp}_{run_id}.log")
     tree_log_file = os.path.join(tree_dir, f"repo_analysis_tree_{timestamp}_{run_id}.log")
 
@@ -122,12 +126,9 @@ def setup_organized_logging(output_dir: str = "./outputs", verbose: bool = True)
 
     fmt_file = logging.Formatter(
         "%(asctime)s [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
-    fmt_console = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S"
-    )
+    fmt_console = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 
     # Handler 1: Verbose (DEBUG level)
     vh = logging.FileHandler(verbose_log_file, encoding="utf-8")
@@ -164,7 +165,7 @@ def setup_organized_logging(output_dir: str = "./outputs", verbose: bool = True)
         "execution": execution_log_file,
         "errors": errors_log_file,
         "tree": tree_log_file,
-        "run_id": run_id
+        "run_id": run_id,
     }
 
 
@@ -177,7 +178,17 @@ def log_repository_tree(repo_dir: str, output_dir: str = "./outputs", max_depth:
 
     repo_name = os.path.basename(os.path.abspath(repo_dir))
     tree_lines = [f"Repository Directory Tree: {repo_name}", "=" * 50]
-    skip_dirs = {".git", "node_modules", "venv", ".venv", "__pycache__", "bin", "obj", ".idea", ".vscode"}
+    skip_dirs = {
+        ".git",
+        "node_modules",
+        "venv",
+        ".venv",
+        "__pycache__",
+        "bin",
+        "obj",
+        ".idea",
+        ".vscode",
+    }
 
     def _walk(dir_path: str, prefix: str = "", depth: int = 0):
         if depth > max_depth:
@@ -190,7 +201,7 @@ def log_repository_tree(repo_dir: str, output_dir: str = "./outputs", max_depth:
             return
         filtered = [e for e in entries if e not in skip_dirs and not e.startswith(".")]
         for idx, item in enumerate(filtered):
-            is_last = (idx == len(filtered) - 1)
+            is_last = idx == len(filtered) - 1
             branch = "└── " if is_last else "├── "
             full_item = os.path.join(dir_path, item)
             if os.path.isdir(full_item):
@@ -240,7 +251,7 @@ def filter_and_summarize_high_rating_repos(output_dir: str = "./outputs") -> Dic
     seen_names = set()
     for r_path in report_files:
         try:
-            with open(r_path, "r", encoding="utf-8") as f:
+            with open(r_path, encoding="utf-8") as f:
                 data = json.load(f)
 
             r_name = data.get("repo") or os.path.basename(os.path.dirname(r_path))
@@ -254,21 +265,29 @@ def filter_and_summarize_high_rating_repos(output_dir: str = "./outputs") -> Dic
                 git_info = data.get("ground_truth", {}).get("git", {})
                 loc_info = data.get("ground_truth", {}).get("loc", {}).get("breakdown", {})
                 langs_dict = data.get("ground_truth", {}).get("languages", {}).get("breakdown", {})
-                langs_str = ", ".join(list(langs_dict.keys())[:5]) if isinstance(langs_dict, dict) else "N/A"
+                langs_str = (
+                    ", ".join(list(langs_dict.keys())[:5])
+                    if isinstance(langs_dict, dict)
+                    else "N/A"
+                )
                 fws_dict = heuristics.get("frameworks", {})
-                fws_str = ", ".join(list(fws_dict.keys())[:5]) if isinstance(fws_dict, dict) else "N/A"
+                fws_str = (
+                    ", ".join(list(fws_dict.keys())[:5]) if isinstance(fws_dict, dict) else "N/A"
+                )
 
-                matched_repos.append({
-                    "repo_name": r_name,
-                    "rating": score,
-                    "label": label,
-                    "commits": git_info.get("commit_count", 0),
-                    "contributors": git_info.get("unique_contributors", 0),
-                    "loc": loc_info.get("code", 0),
-                    "languages": langs_str,
-                    "frameworks": fws_str,
-                    "report_path": r_path
-                })
+                matched_repos.append(
+                    {
+                        "repo_name": r_name,
+                        "rating": score,
+                        "label": label,
+                        "commits": git_info.get("commit_count", 0),
+                        "contributors": git_info.get("unique_contributors", 0),
+                        "loc": loc_info.get("code", 0),
+                        "languages": langs_str,
+                        "frameworks": fws_str,
+                        "report_path": r_path,
+                    }
+                )
                 seen_names.add(r_name)
         except Exception as e:
             logger.warning(f"Error reading report file {r_path}: {e}")
@@ -276,7 +295,7 @@ def filter_and_summarize_high_rating_repos(output_dir: str = "./outputs") -> Dic
     csv_file = os.path.join(output_dir, "summary_all.csv")
     if os.path.isfile(csv_file):
         try:
-            with open(csv_file, "r", encoding="utf-8") as f:
+            with open(csv_file, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     r_name = row.get("repo_name", "")
@@ -285,17 +304,19 @@ def filter_and_summarize_high_rating_repos(output_dir: str = "./outputs") -> Dic
                             score = float(row.get("repo_rating_score", 0.0))
                             label = str(row.get("repo_rating_label", "")).strip()
                             if score > 5.0 and label.lower() != "poor":
-                                matched_repos.append({
-                                    "repo_name": r_name,
-                                    "rating": score,
-                                    "label": label,
-                                    "commits": int(row.get("commits", 0)),
-                                    "contributors": int(row.get("contributors", 0)),
-                                    "loc": int(row.get("loc_code", 0)),
-                                    "languages": row.get("languages", "N/A"),
-                                    "frameworks": row.get("frameworks", "N/A"),
-                                    "report_path": ""
-                                })
+                                matched_repos.append(
+                                    {
+                                        "repo_name": r_name,
+                                        "rating": score,
+                                        "label": label,
+                                        "commits": int(row.get("commits", 0)),
+                                        "contributors": int(row.get("contributors", 0)),
+                                        "loc": int(row.get("loc_code", 0)),
+                                        "languages": row.get("languages", "N/A"),
+                                        "frameworks": row.get("frameworks", "N/A"),
+                                        "report_path": "",
+                                    }
+                                )
                                 seen_names.add(r_name)
                         except (ValueError, TypeError):
                             continue
@@ -306,12 +327,9 @@ def filter_and_summarize_high_rating_repos(output_dir: str = "./outputs") -> Dic
 
     summary_result = {
         "timestamp": datetime.datetime.now().isoformat(),
-        "filter": {
-            "min_rating": 5.0,
-            "exclude_label": "poor"
-        },
+        "filter": {"min_rating": 5.0, "exclude_label": "poor"},
         "total_matching": len(matched_repos),
-        "repositories": matched_repos
+        "repositories": matched_repos,
     }
 
     out_json = os.path.join(output_dir, "summary_high_rating.json")
@@ -324,7 +342,16 @@ def filter_and_summarize_high_rating_repos(output_dir: str = "./outputs") -> Dic
 
     out_csv = os.path.join(output_dir, "summary_high_rating.csv")
     try:
-        fieldnames = ["repo_name", "rating", "label", "commits", "contributors", "loc", "languages", "frameworks"]
+        fieldnames = [
+            "repo_name",
+            "rating",
+            "label",
+            "commits",
+            "contributors",
+            "loc",
+            "languages",
+            "frameworks",
+        ]
         with open(out_csv, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -335,6 +362,7 @@ def filter_and_summarize_high_rating_repos(output_dir: str = "./outputs") -> Dic
         logger.error(f"Failed to write {out_csv}: {e}")
 
     return summary_result
+
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 SIMILARITY_THRESHOLD = 0.85
@@ -348,54 +376,54 @@ CODE_AGE_THRESHOLDS_YEARS = [1, 2]
 
 # Stage 4: Composite rating criteria
 RATING_CRITERIA = {
-    "commits":           {"min": 75,   "preferred": 200,    "weight": 0.20},
-    "dev_span_months":   {"min": 6,    "preferred": 24,     "weight": 0.15},
-    "contributors":      {"min": 2,    "preferred": 5,      "weight": 0.15},
-    "loc":               {"min": 5_000, "preferred": 50_000, "weight": 0.20},
-    "has_tests":         {"weight": 0.10},
-    "has_ci":            {"weight": 0.10},
-    "test_file_count":   {"min": 20,   "preferred": 200,    "weight": 0.05},
-    "source_file_ratio": {"min": 0.40, "preferred": 0.60,   "weight": 0.05},
+    "commits": {"min": 75, "preferred": 200, "weight": 0.20},
+    "dev_span_months": {"min": 6, "preferred": 24, "weight": 0.15},
+    "contributors": {"min": 2, "preferred": 5, "weight": 0.15},
+    "loc": {"min": 5_000, "preferred": 50_000, "weight": 0.20},
+    "has_tests": {"weight": 0.10},
+    "has_ci": {"weight": 0.10},
+    "test_file_count": {"min": 20, "preferred": 200, "weight": 0.05},
+    "source_file_ratio": {"min": 0.40, "preferred": 0.60, "weight": 0.05},
 }
 
 # Stage 4: Framework detection — manifest → framework list
 FRAMEWORK_MANIFEST_PARSERS = {
     "package.json": [
-        "react", "vue", "angular", "svelte",
-        "next", "nuxt", "gatsby", "remix", "astro",
-        "express", "fastify", "nestjs", "koa", "hapi",
+        "react",
+        "vue",
+        "angular",
+        "svelte",
+        "next",
+        "nuxt",
+        "gatsby",
+        "remix",
+        "astro",
+        "express",
+        "fastify",
+        "nestjs",
+        "koa",
+        "hapi",
     ],
     "requirements.txt": [
-        "django", "flask", "fastapi", "tornado",
-        "starlette", "aiohttp", "pyramid", "falcon", "bottle"
+        "django",
+        "flask",
+        "fastapi",
+        "tornado",
+        "starlette",
+        "aiohttp",
+        "pyramid",
+        "falcon",
+        "bottle",
     ],
-    "Pipfile": [
-        "django", "flask", "fastapi"
-    ],
-    "pom.xml": [
-        "spring", "springboot", "quarkus", "micronaut"
-    ],
-    "build.gradle": [
-        "spring", "springboot", "quarkus", "micronaut"
-    ],
-    "Cargo.toml": [
-        "actix", "axum", "warp", "rocket"
-    ],
-    "go.mod": [
-        "gin", "echo", "fiber", "chi", "beego"
-    ],
-    "Gemfile": [
-        "rails", "sinatra", "hanami"
-    ],
-    "composer.json": [
-        "laravel", "symfony", "codeigniter", "yii"
-    ],
-    "mix.exs": [
-        "phoenix"
-    ],
-    "stack.yaml": [
-        "yesod", "scotty"
-    ],
+    "Pipfile": ["django", "flask", "fastapi"],
+    "pom.xml": ["spring", "springboot", "quarkus", "micronaut"],
+    "build.gradle": ["spring", "springboot", "quarkus", "micronaut"],
+    "Cargo.toml": ["actix", "axum", "warp", "rocket"],
+    "go.mod": ["gin", "echo", "fiber", "chi", "beego"],
+    "Gemfile": ["rails", "sinatra", "hanami"],
+    "composer.json": ["laravel", "symfony", "codeigniter", "yii"],
+    "mix.exs": ["phoenix"],
+    "stack.yaml": ["yesod", "scotty"],
 }
 
 IMPORT_FRAMEWORK_MAP = {
@@ -408,7 +436,7 @@ IMPORT_FRAMEWORK_MAP = {
         "aiohttp": "aiohttp",
         "pyramid": "Pyramid",
         "falcon": "Falcon",
-        "bottle": "Bottle"
+        "bottle": "Bottle",
     },
     "js": {
         "express": "Express",
@@ -419,145 +447,432 @@ IMPORT_FRAMEWORK_MAP = {
         "fastify": "Fastify",
         "nestjs": "NestJS",
         "koa": "Koa",
-        "hapi": "Hapi"
+        "hapi": "Hapi",
     },
     "jsx": {"react": "React"},
-    "tsx": {
-        "react": "React",
-        "next": "Next.js"
-    }
+    "tsx": {"react": "React", "next": "Next.js"},
 }
 
 FRONTEND_FRAMEWORKS = {
-    "react", "vue", "angular", "svelte",
-    "next", "nuxt", "gatsby", "remix", "astro"
+    "react",
+    "vue",
+    "angular",
+    "svelte",
+    "next",
+    "nuxt",
+    "gatsby",
+    "remix",
+    "astro",
 }
 
 BACKEND_FRAMEWORKS = {
-    "express", "fastify", "nestjs", "koa", "hapi",
-    "django", "flask", "fastapi", "tornado", "starlette", "aiohttp",
-    "pyramid", "falcon", "bottle",
-    "spring", "springboot", "quarkus", "micronaut",
-    "actix", "axum", "warp", "rocket",
-    "gin", "echo", "fiber", "chi", "beego",
-    "rails", "sinatra", "hanami",
-    "laravel", "symfony", "codeigniter", "yii",
-    "phoenix", "yesod", "scotty"
+    "express",
+    "fastify",
+    "nestjs",
+    "koa",
+    "hapi",
+    "django",
+    "flask",
+    "fastapi",
+    "tornado",
+    "starlette",
+    "aiohttp",
+    "pyramid",
+    "falcon",
+    "bottle",
+    "spring",
+    "springboot",
+    "quarkus",
+    "micronaut",
+    "actix",
+    "axum",
+    "warp",
+    "rocket",
+    "gin",
+    "echo",
+    "fiber",
+    "chi",
+    "beego",
+    "rails",
+    "sinatra",
+    "hanami",
+    "laravel",
+    "symfony",
+    "codeigniter",
+    "yii",
+    "phoenix",
+    "yesod",
+    "scotty",
 }
 
 EXT_TO_LANG_MAP = {
-    '.py': 'Python', '.js': 'JavaScript', '.jsx': 'JSX',
-    '.ts': 'TypeScript', '.tsx': 'TSX', '.go': 'Go',
-    '.java': 'Java', '.c': 'C', '.cpp': 'C++', '.cc': 'C++',
-    '.h': 'C/C++ Header', '.hpp': 'C/C++ Header',
-    '.cs': 'C#', '.rb': 'Ruby', '.php': 'PHP', '.rs': 'Rust',
-    '.html': 'HTML', '.css': 'CSS', '.scss': 'SCSS', '.sass': 'Sass',
-    '.less': 'LESS', '.sql': 'SQL', '.sh': 'Bourne Shell',
-    '.ps1': 'PowerShell', '.bat': 'DOS Batch', '.json': 'JSON',
-    '.xml': 'XML', '.md': 'Markdown', '.yaml': 'YAML', '.yml': 'YAML',
-    '.swift': 'Swift', '.kt': 'Kotlin', '.scala': 'Scala', '.lua': 'Lua'
+    ".py": "Python",
+    ".js": "JavaScript",
+    ".jsx": "JSX",
+    ".ts": "TypeScript",
+    ".tsx": "TSX",
+    ".go": "Go",
+    ".java": "Java",
+    ".c": "C",
+    ".cpp": "C++",
+    ".cc": "C++",
+    ".h": "C/C++ Header",
+    ".hpp": "C/C++ Header",
+    ".cs": "C#",
+    ".rb": "Ruby",
+    ".php": "PHP",
+    ".rs": "Rust",
+    ".html": "HTML",
+    ".css": "CSS",
+    ".scss": "SCSS",
+    ".sass": "Sass",
+    ".less": "LESS",
+    ".sql": "SQL",
+    ".sh": "Bourne Shell",
+    ".ps1": "PowerShell",
+    ".bat": "DOS Batch",
+    ".json": "JSON",
+    ".xml": "XML",
+    ".md": "Markdown",
+    ".yaml": "YAML",
+    ".yml": "YAML",
+    ".swift": "Swift",
+    ".kt": "Kotlin",
+    ".scala": "Scala",
+    ".lua": "Lua",
 }
 
 FORMAL_FRAMEWORK_NAMES = {
-    "react": "React", "next": "Next.js", "vue": "Vue", "angular": "Angular",
-    "svelte": "Svelte", "express": "Express", "fastapi": "FastAPI", "django": "Django",
-    "flask": "Flask", "spring": "Spring Boot", "springboot": "Spring Boot",
-    "postgresql": "PostgreSQL", "postgres": "PostgreSQL", "mongodb": "MongoDB",
-    "redis": "Redis", "mysql": "MySQL", "sqlite": "SQLite", "firebase": "Firebase",
-    "jest": "Jest", "vitest": "Vitest", "cypress": "Cypress", "playwright": "Playwright"
+    "react": "React",
+    "next": "Next.js",
+    "vue": "Vue",
+    "angular": "Angular",
+    "svelte": "Svelte",
+    "express": "Express",
+    "fastapi": "FastAPI",
+    "django": "Django",
+    "flask": "Flask",
+    "spring": "Spring Boot",
+    "springboot": "Spring Boot",
+    "postgresql": "PostgreSQL",
+    "postgres": "PostgreSQL",
+    "mongodb": "MongoDB",
+    "redis": "Redis",
+    "mysql": "MySQL",
+    "sqlite": "SQLite",
+    "firebase": "Firebase",
+    "jest": "Jest",
+    "vitest": "Vitest",
+    "cypress": "Cypress",
+    "playwright": "Playwright",
 }
 
 LANG_MERGE_MAP = {
     "C/C++ Header": "C++",
     "Jupyter Notebook": "Python",
     "JSX": "JavaScript",
-    "TSX": "TypeScript"
+    "TSX": "TypeScript",
 }
 
 FRONTEND_LANGUAGES = {
-    "HTML", "CSS", "SCSS", "Sass", "Less",
-    "JavaScript", "TypeScript",
-    "JSX", "TSX",
-    "Vue", "Svelte"
+    "HTML",
+    "CSS",
+    "SCSS",
+    "Sass",
+    "Less",
+    "JavaScript",
+    "TypeScript",
+    "JSX",
+    "TSX",
+    "Vue",
+    "Svelte",
 }
 
 BACKEND_LANGUAGES = {
-    "Python", "Java", "Go", "Rust", "Ruby", "PHP",
-    "C++", "C", "C#", "Scala", "Kotlin",
-    "Elixir", "Haskell", "Perl", "Clojure",
-    "SQL", "Swift", "Dart"
+    "Python",
+    "Java",
+    "Go",
+    "Rust",
+    "Ruby",
+    "PHP",
+    "C++",
+    "C",
+    "C#",
+    "Scala",
+    "Kotlin",
+    "Elixir",
+    "Haskell",
+    "Perl",
+    "Clojure",
+    "SQL",
+    "Swift",
+    "Dart",
 }
 
 NON_CORE_FORMATS = {
-    "JSON", "XML", "YAML", "CSV", "TOML", "INI", "Protocol Buffers", "Graphviz (DOT)",
-    "SVG", "SQL", "Properties", "Excel", "Parquet", "HCL", "Starlark",
-    "Markdown", "Text", "reStructuredText", "AsciiDoc", "Doxygen", "Org", "TeX", "Org Mode",
-    "Gradle", "ProGuard", "Windows Resource File", "Maven POM", "Protocol Buffers",
-    "PowerShell", "Bourne Shell", "Bourne Again Shell", "Fish Shell", "DOS Batch", "make",
-    "CMake", "Dockerfile", "Vagrantfile", "Procfile", "Rakefile", "Gemfile", "Pipfile",
-    "BitBake", "Meson", "Kconfig", "QMake", "Bazel",
-    "LESS", "SCSS", "Sass", "Stylus", "PostCSS"
+    "JSON",
+    "XML",
+    "YAML",
+    "CSV",
+    "TOML",
+    "INI",
+    "Protocol Buffers",
+    "Graphviz (DOT)",
+    "SVG",
+    "SQL",
+    "Properties",
+    "Excel",
+    "Parquet",
+    "HCL",
+    "Starlark",
+    "Markdown",
+    "Text",
+    "reStructuredText",
+    "AsciiDoc",
+    "Doxygen",
+    "Org",
+    "TeX",
+    "Org Mode",
+    "Gradle",
+    "ProGuard",
+    "Windows Resource File",
+    "Maven POM",
+    "Protocol Buffers",
+    "PowerShell",
+    "Bourne Shell",
+    "Bourne Again Shell",
+    "Fish Shell",
+    "DOS Batch",
+    "make",
+    "CMake",
+    "Dockerfile",
+    "Vagrantfile",
+    "Procfile",
+    "Rakefile",
+    "Gemfile",
+    "Pipfile",
+    "BitBake",
+    "Meson",
+    "Kconfig",
+    "QMake",
+    "Bazel",
+    "LESS",
+    "SCSS",
+    "Sass",
+    "Stylus",
+    "PostCSS",
 }
 
 BOILERPLATE_FILES = {
-    "reportwebvitals.js", "setuptests.js", "app.test.js", "logo.svg",
-    "favicon.ico", "service-worker.js", "manifest.json", "robots.txt",
-    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-    "manage.py", "asgi.py", "wsgi.py", "__init__.py",
-    "mvnw", "mvnw.cmd", "gradlew", "gradlew.bat",
-    "settings.gradle", "gradle-wrapper.properties",
-    "artisan", "server.php",
-    "bundle", "rails", "rake", "setup"
+    "reportwebvitals.js",
+    "setuptests.js",
+    "app.test.js",
+    "logo.svg",
+    "favicon.ico",
+    "service-worker.js",
+    "manifest.json",
+    "robots.txt",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "manage.py",
+    "asgi.py",
+    "wsgi.py",
+    "__init__.py",
+    "mvnw",
+    "mvnw.cmd",
+    "gradlew",
+    "gradlew.bat",
+    "settings.gradle",
+    "gradle-wrapper.properties",
+    "artisan",
+    "server.php",
+    "bundle",
+    "rails",
+    "rake",
+    "setup",
 }
 
 VENDORED_NAMES = {
-    "jquery", "bootstrap", "angular", "react.production", "react-dom.production",
-    "vue.global", "vue.runtime", "lodash", "underscore", "backbone",
-    "d3", "three", "moment", "chart", "highcharts", "leaflet",
-    "popper", "tether", "select2", "datatables", "tinymce", "ckeditor",
-    "ace-editor", "codemirror", "quill", "summernote", "sweetalert",
-    "toastr", "animate", "font-awesome", "normalize", "reset",
-    "polyfill", "modernizr", "respond", "html5shiv", "pace",
-    "hammer", "howler", "socket.io", "fabric", "konva",
-    "excalidraw", "wiris", "mathjax", "katex", "zoom-meeting",
-    "dropbox-sdk", "aws-sdk", "firebase-app", "firebase-auth",
+    "jquery",
+    "bootstrap",
+    "angular",
+    "react.production",
+    "react-dom.production",
+    "vue.global",
+    "vue.runtime",
+    "lodash",
+    "underscore",
+    "backbone",
+    "d3",
+    "three",
+    "moment",
+    "chart",
+    "highcharts",
+    "leaflet",
+    "popper",
+    "tether",
+    "select2",
+    "datatables",
+    "tinymce",
+    "ckeditor",
+    "ace-editor",
+    "codemirror",
+    "quill",
+    "summernote",
+    "sweetalert",
+    "toastr",
+    "animate",
+    "font-awesome",
+    "normalize",
+    "reset",
+    "polyfill",
+    "modernizr",
+    "respond",
+    "html5shiv",
+    "pace",
+    "hammer",
+    "howler",
+    "socket.io",
+    "fabric",
+    "konva",
+    "excalidraw",
+    "wiris",
+    "mathjax",
+    "katex",
+    "zoom-meeting",
+    "dropbox-sdk",
+    "aws-sdk",
+    "firebase-app",
+    "firebase-auth",
     "multislider",
 }
 
 VENDORED_DIRS = {
-    "/vendor/", "/vendors/", "/third_party/", "/third-party/",
-    "/bower_components/", "/jspm_packages/", "/web_modules/",
-    "/custom_node_modules/", "/extern/", "/external/", "/lib/vendor/",
-    "/.bundle/", "/cache/", "/deps/",
-    "/site-packages/", "/dist-packages/", "/_vendor/",
+    "/vendor/",
+    "/vendors/",
+    "/third_party/",
+    "/third-party/",
+    "/bower_components/",
+    "/jspm_packages/",
+    "/web_modules/",
+    "/custom_node_modules/",
+    "/extern/",
+    "/external/",
+    "/lib/vendor/",
+    "/.bundle/",
+    "/cache/",
+    "/deps/",
+    "/site-packages/",
+    "/dist-packages/",
+    "/_vendor/",
 }
 
-BUNDLE_PATTERNS = {"bundle.js", "chunk.js", "vendor.js", "vendors.js", "runtime.js", "main.chunk.js", "vendors~main"}
+BUNDLE_PATTERNS = {
+    "bundle.js",
+    "chunk.js",
+    "vendor.js",
+    "vendors.js",
+    "runtime.js",
+    "main.chunk.js",
+    "vendors~main",
+}
 
 # Stage 4: Infrastructure & Service Detection
 INFRASTRUCTURE_INDICATORS = {
     "databases": [
-        "postgres", "postgresql", "mysql", "mongodb", "redis", "sqlite", "elasticsearch",
-        "dynamodb", "mariadb", "oracle", "mssql", "cassandra",
-        "neo4j", "couchdb", "prisma", "sequelize", "mongoose", "psycopg2", "psycopg",
-        "sqlalchemy", "typeorm", "knex", "tortoise-orm", "dj-database-url",
-        "supabase", "pocketbase", "surrealdb", "cockroachdb", "fauna", "influxdb",
-        "snowflake", "clickhouse", "databricks", "firebird", "trino", "presto"
+        "postgres",
+        "postgresql",
+        "mysql",
+        "mongodb",
+        "redis",
+        "sqlite",
+        "elasticsearch",
+        "dynamodb",
+        "mariadb",
+        "oracle",
+        "mssql",
+        "cassandra",
+        "neo4j",
+        "couchdb",
+        "prisma",
+        "sequelize",
+        "mongoose",
+        "psycopg2",
+        "psycopg",
+        "sqlalchemy",
+        "typeorm",
+        "knex",
+        "tortoise-orm",
+        "dj-database-url",
+        "supabase",
+        "pocketbase",
+        "surrealdb",
+        "cockroachdb",
+        "fauna",
+        "influxdb",
+        "snowflake",
+        "clickhouse",
+        "databricks",
+        "firebird",
+        "trino",
+        "presto",
     ],
     "deployment": [
-        "docker", "kubernetes", "aws", "azure", "gcp", "heroku", "vercel",
-        "netlify", "terraform", "ansible", "jenkins", "travis", "circleci",
-        "github actions", "dockerfile", "docker-compose"
+        "docker",
+        "kubernetes",
+        "aws",
+        "azure",
+        "gcp",
+        "heroku",
+        "vercel",
+        "netlify",
+        "terraform",
+        "ansible",
+        "jenkins",
+        "travis",
+        "circleci",
+        "github actions",
+        "dockerfile",
+        "docker-compose",
     ],
     "apis": [
-        "stripe", "twilio", "sendgrid", "openai", "firebase", "auth0",
-        "slack", "aws-sdk", "google-cloud", "mailgun", "algolia", "pusher"
-    ]
+        "stripe",
+        "twilio",
+        "sendgrid",
+        "openai",
+        "firebase",
+        "auth0",
+        "slack",
+        "aws-sdk",
+        "google-cloud",
+        "mailgun",
+        "algolia",
+        "pusher",
+    ],
 }
 
-INFRA_MANIFESTS_TO_CHECK = ["package.json", "requirements.txt", "Pipfile", "pom.xml","build.gradle", "Cargo.toml", "go.mod", "Gemfile", "composer.json", "docker-compose.yml"
+INFRA_MANIFESTS_TO_CHECK = [
+    "package.json",
+    "requirements.txt",
+    "Pipfile",
+    "pom.xml",
+    "build.gradle",
+    "Cargo.toml",
+    "go.mod",
+    "Gemfile",
+    "composer.json",
+    "docker-compose.yml",
 ]
-INFRA_CONFIG_FILES_TO_CHECK = [".env", "settings.py", "config.js","web.config", "appsettings.json", "config.php", "configuration.yaml"]
+INFRA_CONFIG_FILES_TO_CHECK = [
+    ".env",
+    "settings.py",
+    "config.js",
+    "web.config",
+    "appsettings.json",
+    "config.php",
+    "configuration.yaml",
+]
 
 INFRA_DB_EXTENSIONS = {".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".rdb"}
 
@@ -568,7 +883,7 @@ INFRA_CONN_MAP = {
     "postgresql://": "postgres",
     "mysql://": "mysql",
     "mongodb://": "mongodb",
-    "redis://": "redis"
+    "redis://": "redis",
 }
 
 INFRA_FILE_MAP = {
@@ -578,25 +893,43 @@ INFRA_FILE_MAP = {
     ".travis.yml": ("deployment", "travis"),
     "circle.yml": ("deployment", "circleci"),
     "terraform": ("deployment", "terraform"),
-    ".github/workflows": ("deployment", "github actions")
+    ".github/workflows": ("deployment", "github actions"),
 }
 
 INFRA_CANONICAL_MAP = {
-    "postgres": "PostgreSQL", "postgresql": "PostgreSQL", "psycopg2": "PostgreSQL", "psycopg": "PostgreSQL",
-    "mongodb": "MongoDB", "mongoose": "MongoDB",
-    "mysql": "MySQL", "mariadb": "MariaDB",
-    "sqlite": "SQLite", "redis": "Redis", "elasticsearch": "Elasticsearch",
-    "dynamodb": "DynamoDB", "cassandra": "Cassandra", "oracle": "Oracle",
-    "mssql": "SQL Server", "neo4j": "Neo4j", "couchdb": "CouchDB",
-    "firebase": "Firebase", "firestore": "Firebase",
-    "prisma": "Prisma (ORM)", "sequelize": "Sequelize (ORM)", "sqlalchemy": "SQLAlchemy (ORM)",
-    "typeorm": "TypeORM", "knex": "Knex.js", "docker": "Docker", "kubernetes": "Kubernetes",
-    "github actions": "GitHub Actions", "docker-compose": "Docker Compose"
+    "postgres": "PostgreSQL",
+    "postgresql": "PostgreSQL",
+    "psycopg2": "PostgreSQL",
+    "psycopg": "PostgreSQL",
+    "mongodb": "MongoDB",
+    "mongoose": "MongoDB",
+    "mysql": "MySQL",
+    "mariadb": "MariaDB",
+    "sqlite": "SQLite",
+    "redis": "Redis",
+    "elasticsearch": "Elasticsearch",
+    "dynamodb": "DynamoDB",
+    "cassandra": "Cassandra",
+    "oracle": "Oracle",
+    "mssql": "SQL Server",
+    "neo4j": "Neo4j",
+    "couchdb": "CouchDB",
+    "firebase": "Firebase",
+    "firestore": "Firebase",
+    "prisma": "Prisma (ORM)",
+    "sequelize": "Sequelize (ORM)",
+    "sqlalchemy": "SQLAlchemy (ORM)",
+    "typeorm": "TypeORM",
+    "knex": "Knex.js",
+    "docker": "Docker",
+    "kubernetes": "Kubernetes",
+    "github actions": "GitHub Actions",
+    "docker-compose": "Docker Compose",
 }
 
-DOC_SETUP_KEYWORDS = ['setup', 'install', 'getting started', 'running', 'requirements']
+DOC_SETUP_KEYWORDS = ["setup", "install", "getting started", "running", "requirements"]
 
-COVERAGE_FILES = ['lcov.info', 'coverage.xml', 'cobertura.xml', '.coverage', 'coverage/index.html']
+COVERAGE_FILES = ["lcov.info", "coverage.xml", "cobertura.xml", ".coverage", "coverage/index.html"]
 
 # Stage 4: Testing & Quality Patterns
 TEST_CASE_PATTERNS = {
@@ -611,95 +944,183 @@ TEST_CASE_PATTERNS = {
 
 # Stage 5: Secret / credential scanning patterns
 SECRET_PATTERNS: List[Tuple[str, re.Pattern]] = [
-    ("AWS Access Key",       re.compile(r"AKIA[0-9A-Z]{16}")),
-    ("AWS Secret Key",       re.compile(r"(?i)aws.{0,20}secret.{0,20}['\"][0-9a-zA-Z/+]{40}['\"]")),
-    ("GitHub Token",         re.compile(r"ghp_[0-9a-zA-Z]{36}")),
-    ("GitHub OAuth",         re.compile(r"gho_[0-9a-zA-Z]{36}")),
-    ("GitHub App Token",     re.compile(r"ghu_[0-9a-zA-Z]{36}")),
-    ("Slack Token",          re.compile(r"xox[baprs]-[0-9a-zA-Z\-]{10,48}")),
-    ("Google API Key",       re.compile(r"AIza[0-9A-Za-z\-_]{35}")),
-    ("Stripe Secret Key",    re.compile(r"sk_live_[0-9a-zA-Z]{24,}")),
-    ("Stripe Public Key",    re.compile(r"pk_live_[0-9a-zA-Z]{24,}")),
-    ("Private Key Block",    re.compile(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----")),
-    ("Generic Password",     re.compile(r"(?i)(password|passwd|pwd)\s*[=:]\s*['\"][^'\"]{6,}['\"]")),
-    ("Generic API Key",      re.compile(r"(?i)(api_key|apikey|api-key)\s*[=:]\s*['\"][^'\"]{8,}['\"]")),
-    ("Generic Secret",       re.compile(r"(?i)(secret|token)\s*[=:]\s*['\"][^'\"]{8,}['\"]")),
+    ("AWS Access Key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("AWS Secret Key", re.compile(r"(?i)aws.{0,20}secret.{0,20}['\"][0-9a-zA-Z/+]{40}['\"]")),
+    ("GitHub Token", re.compile(r"ghp_[0-9a-zA-Z]{36}")),
+    ("GitHub OAuth", re.compile(r"gho_[0-9a-zA-Z]{36}")),
+    ("GitHub App Token", re.compile(r"ghu_[0-9a-zA-Z]{36}")),
+    ("Slack Token", re.compile(r"xox[baprs]-[0-9a-zA-Z\-]{10,48}")),
+    ("Google API Key", re.compile(r"AIza[0-9A-Za-z\-_]{35}")),
+    ("Stripe Secret Key", re.compile(r"sk_live_[0-9a-zA-Z]{24,}")),
+    ("Stripe Public Key", re.compile(r"pk_live_[0-9a-zA-Z]{24,}")),
+    ("Private Key Block", re.compile(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----")),
+    ("Generic Password", re.compile(r"(?i)(password|passwd|pwd)\s*[=:]\s*['\"][^'\"]{6,}['\"]")),
+    ("Generic API Key", re.compile(r"(?i)(api_key|apikey|api-key)\s*[=:]\s*['\"][^'\"]{8,}['\"]")),
+    ("Generic Secret", re.compile(r"(?i)(secret|token)\s*[=:]\s*['\"][^'\"]{8,}['\"]")),
     ("DB Connection String", re.compile(r"(?i)(mongodb|postgres|mysql|redis)://[^\s'\"]{10,}")),
-    ("Bearer Token",         re.compile(r"(?i)bearer\s+[0-9a-zA-Z\-._~+/]{20,}")),
+    ("Bearer Token", re.compile(r"(?i)bearer\s+[0-9a-zA-Z\-._~+/]{20,}")),
 ]
 
 SECRET_SCAN_EXTENSIONS = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rb", ".php",
-    ".java", ".kt", ".cs", ".env", ".sh", ".bash", ".yml", ".yaml",
-    ".toml", ".ini", ".cfg", ".conf", ".json",
+    ".py",
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".go",
+    ".rb",
+    ".php",
+    ".java",
+    ".kt",
+    ".cs",
+    ".env",
+    ".sh",
+    ".bash",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".json",
 }
 
 SECRET_SCAN_SKIP = {".lock", ".sum", ".mod"}
 
 # Language name mapping (extension → display name)
 EXT_TO_LANGUAGE: Dict[str, str] = {
-    ".c": "C", ".h": "C",
-    ".cpp": "C++", ".hpp": "C++", ".cc": "C++", ".cxx": "C++",
-    ".c++": "C++", ".hxx": "C++", ".h++": "C++", ".C": "C++", ".H": "C++",
-    ".py": "Python", ".pyw": "Python", ".pyx": "Python",
-    ".pxd": "Python", ".pyi": "Python",
-    ".js": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",
+    ".c": "C",
+    ".h": "C",
+    ".cpp": "C++",
+    ".hpp": "C++",
+    ".cc": "C++",
+    ".cxx": "C++",
+    ".c++": "C++",
+    ".hxx": "C++",
+    ".h++": "C++",
+    ".C": "C++",
+    ".H": "C++",
+    ".py": "Python",
+    ".pyw": "Python",
+    ".pyx": "Python",
+    ".pxd": "Python",
+    ".pyi": "Python",
+    ".js": "JavaScript",
+    ".mjs": "JavaScript",
+    ".cjs": "JavaScript",
     ".jsx": "JavaScript",
-    ".ts": "TypeScript", ".tsx": "TypeScript",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScript",
     ".java": "Java",
-    ".kt": "Kotlin", ".kts": "Kotlin",
+    ".kt": "Kotlin",
+    ".kts": "Kotlin",
     ".scala": "Scala",
-    ".groovy": "Groovy", ".gradle": "Groovy",
-    ".clj": "Clojure", ".cljs": "Clojure", ".cljc": "Clojure", ".edn": "Clojure",
+    ".groovy": "Groovy",
+    ".gradle": "Groovy",
+    ".clj": "Clojure",
+    ".cljs": "Clojure",
+    ".cljc": "Clojure",
+    ".edn": "Clojure",
     ".cs": "C#",
-    ".fs": "F#", ".fsx": "F#", ".fsi": "F#",
+    ".fs": "F#",
+    ".fsx": "F#",
+    ".fsi": "F#",
     ".go": "Go",
     ".rs": "Rust",
     ".swift": "Swift",
-    ".m": "Objective-C", ".mm": "Objective-C",
+    ".m": "Objective-C",
+    ".mm": "Objective-C",
     ".zig": "Zig",
     ".nim": "Nim",
     ".v": "V",
     ".d": "D",
-    ".ada": "Ada", ".adb": "Ada", ".ads": "Ada",
-    ".sh": "Shell", ".bash": "Shell", ".zsh": "Shell",
-    ".fish": "Shell", ".ksh": "Shell", ".csh": "Shell", ".tcsh": "Shell",
-    ".bat": "Batch", ".cmd": "Batch",
+    ".ada": "Ada",
+    ".adb": "Ada",
+    ".ads": "Ada",
+    ".sh": "Shell",
+    ".bash": "Shell",
+    ".zsh": "Shell",
+    ".fish": "Shell",
+    ".ksh": "Shell",
+    ".csh": "Shell",
+    ".tcsh": "Shell",
+    ".bat": "Batch",
+    ".cmd": "Batch",
     ".ps1": "PowerShell",
-    ".rb": "Ruby", ".erb": "Ruby", ".rake": "Ruby",
-    ".php": "PHP", ".php3": "PHP", ".php4": "PHP", ".php5": "PHP", ".phtml": "PHP",
-    ".pl": "Perl", ".pm": "Perl", ".t": "Perl", ".pod": "Perl",
+    ".rb": "Ruby",
+    ".erb": "Ruby",
+    ".rake": "Ruby",
+    ".php": "PHP",
+    ".php3": "PHP",
+    ".php4": "PHP",
+    ".php5": "PHP",
+    ".phtml": "PHP",
+    ".pl": "Perl",
+    ".pm": "Perl",
+    ".t": "Perl",
+    ".pod": "Perl",
     ".lua": "Lua",
-    ".r": "R", ".R": "R",
-    ".hs": "Haskell", ".lhs": "Haskell",
-    ".ml": "OCaml", ".mli": "OCaml",
-    ".erl": "Erlang", ".hrl": "Erlang",
-    ".ex": "Elixir", ".exs": "Elixir",
+    ".r": "R",
+    ".R": "R",
+    ".hs": "Haskell",
+    ".lhs": "Haskell",
+    ".ml": "OCaml",
+    ".mli": "OCaml",
+    ".erl": "Erlang",
+    ".hrl": "Erlang",
+    ".ex": "Elixir",
+    ".exs": "Elixir",
     ".elm": "Elm",
-    ".lisp": "Lisp", ".lsp": "Lisp", ".cl": "Lisp", ".el": "Lisp",
-    ".scm": "Scheme", ".ss": "Scheme", ".rkt": "Scheme",
-    ".re": "ReasonML", ".rei": "ReasonML",
+    ".lisp": "Lisp",
+    ".lsp": "Lisp",
+    ".cl": "Lisp",
+    ".el": "Lisp",
+    ".scm": "Scheme",
+    ".ss": "Scheme",
+    ".rkt": "Scheme",
+    ".re": "ReasonML",
+    ".rei": "ReasonML",
     ".purs": "PureScript",
     ".dart": "Dart",
     ".jl": "Julia",
-    ".f": "Fortran", ".for": "Fortran", ".f90": "Fortran",
-    ".f95": "Fortran", ".f03": "Fortran", ".f08": "Fortran",
+    ".f": "Fortran",
+    ".for": "Fortran",
+    ".f90": "Fortran",
+    ".f95": "Fortran",
+    ".f03": "Fortran",
+    ".f08": "Fortran",
     ".sol": "Solidity",
     ".move": "Move",
-    ".vh": "Verilog", ".sv": "Verilog",
-    ".vhd": "VHDL", ".vhdl": "VHDL",
-    ".asm": "Assembly", ".s": "Assembly", ".S": "Assembly",
+    ".vh": "Verilog",
+    ".sv": "Verilog",
+    ".vhd": "VHDL",
+    ".vhdl": "VHDL",
+    ".asm": "Assembly",
+    ".s": "Assembly",
+    ".S": "Assembly",
     ".vue": "Vue",
     ".svelte": "Svelte",
-    ".jsp": "JSP", ".asp": "ASP", ".aspx": "ASP.NET",
-    ".sql": "SQL", ".psql": "SQL", ".mysql": "SQL", ".pgsql": "SQL",
-    ".graphql": "GraphQL", ".gql": "GraphQL",
+    ".jsp": "JSP",
+    ".asp": "ASP",
+    ".aspx": "ASP.NET",
+    ".sql": "SQL",
+    ".psql": "SQL",
+    ".mysql": "SQL",
+    ".pgsql": "SQL",
+    ".graphql": "GraphQL",
+    ".gql": "GraphQL",
     ".proto": "Protobuf",
-    ".tf": "Terraform", ".tfvars": "Terraform", ".hcl": "HCL",
+    ".tf": "Terraform",
+    ".tfvars": "Terraform",
+    ".hcl": "HCL",
     ".sls": "SaltStack",
     ".ipynb": "Jupyter",
-    ".pas": "Pascal", ".pp": "Pascal", ".inc": "Pascal",
-    ".cob": "COBOL", ".cbl": "COBOL", ".cpy": "COBOL",
+    ".pas": "Pascal",
+    ".pp": "Pascal",
+    ".inc": "Pascal",
+    ".cob": "COBOL",
+    ".cbl": "COBOL",
+    ".cpy": "COBOL",
     ".cr": "Crystal",
     ".vim": "Vimscript",
     ".tcl": "Tcl",
@@ -707,45 +1128,145 @@ EXT_TO_LANGUAGE: Dict[str, str] = {
     ".sed": "Sed",
     ".mk": "Makefile",
     ".cmake": "CMake",
-    ".hack": "Hack", ".hh": "Hack",
-    ".groovy": "Groovy",
+    ".hack": "Hack",
+    ".hh": "Hack",
 }
 
 OPENSOURCE_LICENSE_FILES = {
-    "license", "license.txt", "license.md", "license.rst",
-    "licence", "licence.txt", "licence.md",
-    "copying", "copying.txt", "copying.md",
+    "license",
+    "license.txt",
+    "license.md",
+    "license.rst",
+    "licence",
+    "licence.txt",
+    "licence.md",
+    "copying",
+    "copying.txt",
+    "copying.md",
 }
 
 OPENSOURCE_SPDX_INDICATORS = [
-    "mit license", "apache license", "gnu general public",
-    "bsd license", "bsd 3-clause", "bsd 2-clause", "mozilla public",
-    "isc license", "creative commons", "the unlicense", "eclipse public",
-    "european union public", "common development",
+    "mit license",
+    "apache license",
+    "gnu general public",
+    "bsd license",
+    "bsd 3-clause",
+    "bsd 2-clause",
+    "mozilla public",
+    "isc license",
+    "creative commons",
+    "the unlicense",
+    "eclipse public",
+    "european union public",
+    "common development",
 ]
 
 SKIP_DIRS = {
-    '.git', 'node_modules', 'vendor', 'vendors', '__pycache__', 'env', 'venv', '.venv',
-    '.tox', 'build', 'dist', '.idea', '.vscode',
-    '.next', '.nuxt', '.svelte-kit', '.output', '.cache', '.parcel-cache',
-    'out', 'coverage', '.pytest_cache', '.mypy_cache',
-    '.env', 'virtualenv', 'conda-env', 'site-packages', 'dist-packages',
-    '.yarn', '.pnp', 'bower_components', 'jspm_packages', 'web_modules',
-    'migrations', 'alembic',
-    'test', 'tests', 'spec', 'specs', 'docs', 'documentation',
-    'examples', 'samples', 'demo', 'benchmarks', 'screenshots',
-    'Lib', 'lib64', 'Scripts', 'bin', 'Include', 'obj',
-    'third_party', 'third-party', 'extern', 'external', 'custom_node_modules'
+    ".git",
+    "node_modules",
+    "vendor",
+    "vendors",
+    "__pycache__",
+    "env",
+    "venv",
+    ".venv",
+    ".tox",
+    "build",
+    "dist",
+    ".idea",
+    ".vscode",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".output",
+    ".cache",
+    ".parcel-cache",
+    "out",
+    "coverage",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".env",
+    "virtualenv",
+    "conda-env",
+    "site-packages",
+    "dist-packages",
+    ".yarn",
+    ".pnp",
+    "bower_components",
+    "jspm_packages",
+    "web_modules",
+    "migrations",
+    "alembic",
+    "test",
+    "tests",
+    "spec",
+    "specs",
+    "docs",
+    "documentation",
+    "examples",
+    "samples",
+    "demo",
+    "benchmarks",
+    "screenshots",
+    "Lib",
+    "lib64",
+    "Scripts",
+    "bin",
+    "Include",
+    "obj",
+    "third_party",
+    "third-party",
+    "extern",
+    "external",
+    "custom_node_modules",
 }
 
 SKIP_EXTENSIONS = {
-    '.pyc', '.pyo', '.exe', '.dll', '.so', '.dylib', '.gitignore', '.gitmodules',
-    '.zip', '.tar', '.gz', '.jpg', '.jpeg', '.png', '.gif',
-    '.pdf', '.mp4', '.mp3', '.ttf', '.woff', '.woff2',
-    '.eot', '.otf', '.ico', '.svg', '.webp', '.bmp',
-    '.json', '.md', '.markdown', '.txt', '.yaml', '.yml', '.toml', '.xml', '.csv', '.tsv',
-    '.diff', '.patch',
-    '.org', '.rc', '.pro', '.properties', '.gradle', '.pom'
+    ".pyc",
+    ".pyo",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".gitignore",
+    ".gitmodules",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".pdf",
+    ".mp4",
+    ".mp3",
+    ".ttf",
+    ".woff",
+    ".woff2",
+    ".eot",
+    ".otf",
+    ".ico",
+    ".svg",
+    ".webp",
+    ".bmp",
+    ".json",
+    ".md",
+    ".markdown",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".xml",
+    ".csv",
+    ".tsv",
+    ".diff",
+    ".patch",
+    ".org",
+    ".rc",
+    ".pro",
+    ".properties",
+    ".gradle",
+    ".pom",
 }
 
 C_EXTENSIONS = {".c", ".h"}
@@ -814,64 +1335,179 @@ REASON_EXTENSIONS = {".re", ".rei"}
 PURESCRIPT_EXTENSIONS = {".purs"}
 
 CODE_EXTENSIONS = (
-    C_EXTENSIONS | CPP_EXTENSIONS | PYTHON_EXTENSIONS | JAVASCRIPT_EXTENSIONS |
-    TYPESCRIPT_EXTENSIONS | JSX_EXTENSIONS | FRONTEND_FRAMEWORK_EXTENSIONS |
-    JAVA_EXTENSIONS | KOTLIN_EXTENSIONS | SCALA_EXTENSIONS | GROOVY_EXTENSIONS |
-    CLOJURE_EXTENSIONS | CSHARP_EXTENSIONS | FSHARP_EXTENSIONS | GO_EXTENSIONS |
-    RUST_EXTENSIONS | SWIFT_EXTENSIONS | OBJC_EXTENSIONS | UNIX_SHELL_EXTENSIONS |
-    WINDOWS_SHELL_EXTENSIONS | RUBY_EXTENSIONS | PHP_EXTENSIONS | PERL_EXTENSIONS |
-    LUA_EXTENSIONS | R_EXTENSIONS | HASKELL_EXTENSIONS | OCAML_EXTENSIONS |
-    ERLANG_EXTENSIONS | ELIXIR_EXTENSIONS | ELM_EXTENSIONS | DART_EXTENSIONS |
-    JULIA_EXTENSIONS | NIM_EXTENSIONS | CRYSTAL_EXTENSIONS | ZIG_EXTENSIONS |
-    V_EXTENSIONS | VERILOG_EXTENSIONS | VHDL_EXTENSIONS | ASSEMBLY_EXTENSIONS |
-    SOLIDITY_EXTENSIONS | MOVE_EXTENSIONS | WEB_TEMPLATE_EXTENSIONS |
-    SQL_EXTENSIONS | GRAPHQL_EXTENSIONS | PROTOBUF_EXTENSIONS |
-    TERRAFORM_EXTENSIONS | SALT_EXTENSIONS |
-    JUPYTER_EXTENSIONS | PASCAL_EXTENSIONS | FORTRAN_EXTENSIONS |
-    COBOL_EXTENSIONS | ADA_EXTENSIONS | D_EXTENSIONS | LISP_EXTENSIONS |
-    SCHEME_EXTENSIONS | VIM_EXTENSIONS | TCL_EXTENSIONS | AWK_EXTENSIONS |
-    SED_EXTENSIONS | MAKEFILE_EXTENSIONS | CMAKE_EXTENSIONS | HACK_EXTENSIONS |
-    REASON_EXTENSIONS | PURESCRIPT_EXTENSIONS
+    C_EXTENSIONS
+    | CPP_EXTENSIONS
+    | PYTHON_EXTENSIONS
+    | JAVASCRIPT_EXTENSIONS
+    | TYPESCRIPT_EXTENSIONS
+    | JSX_EXTENSIONS
+    | FRONTEND_FRAMEWORK_EXTENSIONS
+    | JAVA_EXTENSIONS
+    | KOTLIN_EXTENSIONS
+    | SCALA_EXTENSIONS
+    | GROOVY_EXTENSIONS
+    | CLOJURE_EXTENSIONS
+    | CSHARP_EXTENSIONS
+    | FSHARP_EXTENSIONS
+    | GO_EXTENSIONS
+    | RUST_EXTENSIONS
+    | SWIFT_EXTENSIONS
+    | OBJC_EXTENSIONS
+    | UNIX_SHELL_EXTENSIONS
+    | WINDOWS_SHELL_EXTENSIONS
+    | RUBY_EXTENSIONS
+    | PHP_EXTENSIONS
+    | PERL_EXTENSIONS
+    | LUA_EXTENSIONS
+    | R_EXTENSIONS
+    | HASKELL_EXTENSIONS
+    | OCAML_EXTENSIONS
+    | ERLANG_EXTENSIONS
+    | ELIXIR_EXTENSIONS
+    | ELM_EXTENSIONS
+    | DART_EXTENSIONS
+    | JULIA_EXTENSIONS
+    | NIM_EXTENSIONS
+    | CRYSTAL_EXTENSIONS
+    | ZIG_EXTENSIONS
+    | V_EXTENSIONS
+    | VERILOG_EXTENSIONS
+    | VHDL_EXTENSIONS
+    | ASSEMBLY_EXTENSIONS
+    | SOLIDITY_EXTENSIONS
+    | MOVE_EXTENSIONS
+    | WEB_TEMPLATE_EXTENSIONS
+    | SQL_EXTENSIONS
+    | GRAPHQL_EXTENSIONS
+    | PROTOBUF_EXTENSIONS
+    | TERRAFORM_EXTENSIONS
+    | SALT_EXTENSIONS
+    | JUPYTER_EXTENSIONS
+    | PASCAL_EXTENSIONS
+    | FORTRAN_EXTENSIONS
+    | COBOL_EXTENSIONS
+    | ADA_EXTENSIONS
+    | D_EXTENSIONS
+    | LISP_EXTENSIONS
+    | SCHEME_EXTENSIONS
+    | VIM_EXTENSIONS
+    | TCL_EXTENSIONS
+    | AWK_EXTENSIONS
+    | SED_EXTENSIONS
+    | MAKEFILE_EXTENSIONS
+    | CMAKE_EXTENSIONS
+    | HACK_EXTENSIONS
+    | REASON_EXTENSIONS
+    | PURESCRIPT_EXTENSIONS
 )
 
 NON_CODE_EXTENSIONS = {
-    ".md", ".markdown", ".rst", ".txt", ".adoc", ".tex",
-    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
-    ".xml", ".csv", ".tsv", ".dat",
-    ".log", ".tmp", ".temp", ".bak", ".swp", ".swo",
-    ".lock", ".pem", ".crt", ".key", ".cer",
-    ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar"
+    ".md",
+    ".markdown",
+    ".rst",
+    ".txt",
+    ".adoc",
+    ".tex",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".xml",
+    ".csv",
+    ".tsv",
+    ".dat",
+    ".log",
+    ".tmp",
+    ".temp",
+    ".bak",
+    ".swp",
+    ".swo",
+    ".lock",
+    ".pem",
+    ".crt",
+    ".key",
+    ".cer",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".7z",
+    ".rar",
 }
 
 SPECIAL_CODE_FILES = {
-    "dockerfile": "code", "makefile": "code", "gnumakefile": "code",
-    "rakefile": "code", "gemfile": "code", "vagrantfile": "code",
-    "jenkinsfile": "code", "podfile": "code", "brewfile": "code",
-    "cakefile": "code", "guardfile": "code", "fastfile": "code",
-    "dangerfile": "code"
+    "dockerfile": "code",
+    "makefile": "code",
+    "gnumakefile": "code",
+    "rakefile": "code",
+    "gemfile": "code",
+    "vagrantfile": "code",
+    "jenkinsfile": "code",
+    "podfile": "code",
+    "brewfile": "code",
+    "cakefile": "code",
+    "guardfile": "code",
+    "fastfile": "code",
+    "dangerfile": "code",
 }
 
 EXCLUDED_SPECIAL_FILES = {
-    "readme", "license", "licence", "changelog", "changes",
-    "authors", "contributors", "notice", "patents", "copying",
-    "todo", "history", "news", "thanks", "credits", "citation"
+    "readme",
+    "license",
+    "licence",
+    "changelog",
+    "changes",
+    "authors",
+    "contributors",
+    "notice",
+    "patents",
+    "copying",
+    "todo",
+    "history",
+    "news",
+    "thanks",
+    "credits",
+    "citation",
 }
 
 CONFIG_FILENAMES = {
-    'requirements.txt', 'package.json', 'pom.xml',
-    'build.gradle', 'cargo.toml', 'dockerfile', 'makefile', 'setup.py',
-    'gemfile', 'rakefile', 'podfile'
+    "requirements.txt",
+    "package.json",
+    "pom.xml",
+    "build.gradle",
+    "cargo.toml",
+    "dockerfile",
+    "makefile",
+    "setup.py",
+    "gemfile",
+    "rakefile",
+    "podfile",
 }
 
 CI_FILENAMES = {
-    ".gitlab-ci.yml", ".gitlab-ci.yaml", "circle.yml", ".circleci",
-    "azure-pipelines.yml", "azure-pipelines.yaml", ".travis.yml",
-    "appveyor.yml", "jenkinsfile"
+    ".gitlab-ci.yml",
+    ".gitlab-ci.yaml",
+    "circle.yml",
+    ".circleci",
+    "azure-pipelines.yml",
+    "azure-pipelines.yaml",
+    ".travis.yml",
+    "appveyor.yml",
+    "jenkinsfile",
 }
 
 CI_DIRECTORIES = {".github/workflows", ".circleci", ".azure-pipelines"}
 
-CI_PATH_PATTERNS = {'.github/workflows', '.github\\workflows', '.circleci/', '.gitlab-ci', 'azure-pipelines'}
+CI_PATH_PATTERNS = {
+    ".github/workflows",
+    ".github\\workflows",
+    ".circleci/",
+    ".gitlab-ci",
+    "azure-pipelines",
+}
 
 _overlap = CODE_EXTENSIONS & NON_CODE_EXTENSIONS
 if _overlap:
@@ -880,27 +1516,73 @@ if _overlap:
         f"This indicates a configuration error. Please review extension definitions."
     )
 
-allCodeExts = []
+allCodeExts = []  # type: ignore
 
 extSets = [
-    C_EXTENSIONS, CPP_EXTENSIONS, PYTHON_EXTENSIONS, JAVASCRIPT_EXTENSIONS,
-    TYPESCRIPT_EXTENSIONS, JSX_EXTENSIONS, FRONTEND_FRAMEWORK_EXTENSIONS,
-    JAVA_EXTENSIONS, KOTLIN_EXTENSIONS, SCALA_EXTENSIONS, GROOVY_EXTENSIONS,
-    CLOJURE_EXTENSIONS, CSHARP_EXTENSIONS, FSHARP_EXTENSIONS, GO_EXTENSIONS,
-    RUST_EXTENSIONS, SWIFT_EXTENSIONS, OBJC_EXTENSIONS, UNIX_SHELL_EXTENSIONS,
-    WINDOWS_SHELL_EXTENSIONS, RUBY_EXTENSIONS, PHP_EXTENSIONS, PERL_EXTENSIONS,
-    LUA_EXTENSIONS, R_EXTENSIONS, HASKELL_EXTENSIONS, OCAML_EXTENSIONS,
-    ERLANG_EXTENSIONS, ELIXIR_EXTENSIONS, ELM_EXTENSIONS, DART_EXTENSIONS,
-    JULIA_EXTENSIONS, NIM_EXTENSIONS, CRYSTAL_EXTENSIONS, ZIG_EXTENSIONS,
-    V_EXTENSIONS, VERILOG_EXTENSIONS, VHDL_EXTENSIONS, ASSEMBLY_EXTENSIONS,
-    SOLIDITY_EXTENSIONS, MOVE_EXTENSIONS, WEB_TEMPLATE_EXTENSIONS,
-    SQL_EXTENSIONS, GRAPHQL_EXTENSIONS, PROTOBUF_EXTENSIONS,
-    TERRAFORM_EXTENSIONS, SALT_EXTENSIONS,
-    JUPYTER_EXTENSIONS, PASCAL_EXTENSIONS, FORTRAN_EXTENSIONS,
-    COBOL_EXTENSIONS, ADA_EXTENSIONS, D_EXTENSIONS, LISP_EXTENSIONS,
-    SCHEME_EXTENSIONS, VIM_EXTENSIONS, TCL_EXTENSIONS, AWK_EXTENSIONS,
-    SED_EXTENSIONS, MAKEFILE_EXTENSIONS, CMAKE_EXTENSIONS, HACK_EXTENSIONS,
-    REASON_EXTENSIONS, PURESCRIPT_EXTENSIONS
+    C_EXTENSIONS,
+    CPP_EXTENSIONS,
+    PYTHON_EXTENSIONS,
+    JAVASCRIPT_EXTENSIONS,
+    TYPESCRIPT_EXTENSIONS,
+    JSX_EXTENSIONS,
+    FRONTEND_FRAMEWORK_EXTENSIONS,
+    JAVA_EXTENSIONS,
+    KOTLIN_EXTENSIONS,
+    SCALA_EXTENSIONS,
+    GROOVY_EXTENSIONS,
+    CLOJURE_EXTENSIONS,
+    CSHARP_EXTENSIONS,
+    FSHARP_EXTENSIONS,
+    GO_EXTENSIONS,
+    RUST_EXTENSIONS,
+    SWIFT_EXTENSIONS,
+    OBJC_EXTENSIONS,
+    UNIX_SHELL_EXTENSIONS,
+    WINDOWS_SHELL_EXTENSIONS,
+    RUBY_EXTENSIONS,
+    PHP_EXTENSIONS,
+    PERL_EXTENSIONS,
+    LUA_EXTENSIONS,
+    R_EXTENSIONS,
+    HASKELL_EXTENSIONS,
+    OCAML_EXTENSIONS,
+    ERLANG_EXTENSIONS,
+    ELIXIR_EXTENSIONS,
+    ELM_EXTENSIONS,
+    DART_EXTENSIONS,
+    JULIA_EXTENSIONS,
+    NIM_EXTENSIONS,
+    CRYSTAL_EXTENSIONS,
+    ZIG_EXTENSIONS,
+    V_EXTENSIONS,
+    VERILOG_EXTENSIONS,
+    VHDL_EXTENSIONS,
+    ASSEMBLY_EXTENSIONS,
+    SOLIDITY_EXTENSIONS,
+    MOVE_EXTENSIONS,
+    WEB_TEMPLATE_EXTENSIONS,
+    SQL_EXTENSIONS,
+    GRAPHQL_EXTENSIONS,
+    PROTOBUF_EXTENSIONS,
+    TERRAFORM_EXTENSIONS,
+    SALT_EXTENSIONS,
+    JUPYTER_EXTENSIONS,
+    PASCAL_EXTENSIONS,
+    FORTRAN_EXTENSIONS,
+    COBOL_EXTENSIONS,
+    ADA_EXTENSIONS,
+    D_EXTENSIONS,
+    LISP_EXTENSIONS,
+    SCHEME_EXTENSIONS,
+    VIM_EXTENSIONS,
+    TCL_EXTENSIONS,
+    AWK_EXTENSIONS,
+    SED_EXTENSIONS,
+    MAKEFILE_EXTENSIONS,
+    CMAKE_EXTENSIONS,
+    HACK_EXTENSIONS,
+    REASON_EXTENSIONS,
+    PURESCRIPT_EXTENSIONS,
 ]
 
 for extGroup in extSets:
@@ -908,6 +1590,7 @@ for extGroup in extSets:
 
 if len(allCodeExts) != len(set(allCodeExts)):
     from collections import Counter
+
     duplicates = [ext for ext, count in Counter(allCodeExts).items() if count > 1]
     raise ValueError(
         f"CRITICAL: Duplicate extensions found in CODE_EXTENSIONS groups: {duplicates}\n"
@@ -945,7 +1628,7 @@ def logResourceStats(label: str = "") -> None:
         logger.info(
             f"[RESOURCES]{' ' + label if label else ''} "
             f"CPU={cpuPct:.1f}%  RAM={mem.percent:.1f}%  "
-            f"Available={mem.available // (1024*1024)} MB"
+            f"Available={mem.available // (1024 * 1024)} MB"
         )
     except Exception:
         pass
@@ -961,7 +1644,7 @@ def getLlmTokens(text: str) -> int:
     if not text:
         return 0
 
-    if HAS_TIKTOKEN:
+    if HAS_TIKTOKEN and ENCODING is not None:
         try:
             return len(ENCODING.encode(text, disallowed_special=()))
         except Exception as e:
@@ -987,12 +1670,18 @@ def computeSimilarity(tokens1: List[str], tokens2: List[str]) -> float:
     return len(set1 & set2) / len(set1 | set2)
 
 
-def cloneRepo(repoUrl: str, targetDir: str, githubToken: Optional[str] = None, gitlabToken: Optional[str] = None, azureToken: Optional[str] = None) -> bool:
+def cloneRepo(
+    repoUrl: str,
+    targetDir: str,
+    githubToken: Optional[str] = None,
+    gitlabToken: Optional[str] = None,
+    azureToken: Optional[str] = None,
+) -> bool:
     actualUrl = repoUrl
     maskedUrl = repoUrl
     tokens_to_mask = []
 
-    m_token = re.search(r'https://([^/@]+)@', repoUrl)
+    m_token = re.search(r"https://([^/@]+)@", repoUrl)
     if m_token:
         embedded_tok = m_token.group(1)
         if embedded_tok and embedded_tok.lower() not in ("git", "oauth2"):
@@ -1005,7 +1694,7 @@ def cloneRepo(repoUrl: str, targetDir: str, githubToken: Optional[str] = None, g
     if azInfo:
         org, project, repo = azInfo
         token_use = azureToken or githubToken
-        clean_url = re.sub(r'https://[^/@]+@', 'https://', repoUrl)
+        clean_url = re.sub(r"https://[^/@]+@", "https://", repoUrl)
         if token_use:
             actualUrl = clean_url.replace("https://", f"https://{token_use}@")
             maskedUrl = clean_url.replace("https://", "https://[MASKED]@")
@@ -1041,9 +1730,9 @@ def cloneRepo(repoUrl: str, targetDir: str, githubToken: Optional[str] = None, g
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
-                errors="replace"
+                errors="replace",
             )
-            
+
             def stream_reader(pipe, dest):
                 try:
                     for line in pipe:
@@ -1066,7 +1755,9 @@ def cloneRepo(repoUrl: str, targetDir: str, githubToken: Optional[str] = None, g
             logger.error("[cloneRepo] 'git' command not found. Please install git.")
             return False
         except Exception as e:
-            logger.error(f"[cloneRepo] Unexpected error during authenticated clone: {mask_text(str(e))}")
+            logger.error(
+                f"[cloneRepo] Unexpected error during authenticated clone: {mask_text(str(e))}"
+            )
             return False
     else:
         try:
@@ -1076,7 +1767,7 @@ def cloneRepo(repoUrl: str, targetDir: str, githubToken: Optional[str] = None, g
                 stderr=sys.stderr,
                 text=True,
                 encoding="utf-8",
-                errors="replace"
+                errors="replace",
             )
             return result.returncode == 0
         except FileNotFoundError:
@@ -1110,11 +1801,11 @@ def hashFile(filepath: str) -> str:
 def readFileSafe(filepath: str) -> Optional[str]:
     """Read a file safely using utf-8 or latin-1 fallback."""
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, encoding="utf-8") as f:
             return f.read()
     except UnicodeDecodeError:
         try:
-            with open(filepath, 'r', encoding='latin-1') as f:
+            with open(filepath, encoding="latin-1") as f:
                 return f.read()
         except Exception:
             return None
@@ -1141,7 +1832,9 @@ def classifyFile(filename: str, ext: str) -> Tuple[bool, str]:
     return False, "unknown"
 
 
-def runStage1Analysis(rootDir: str, maxFiles: Optional[int] = None) -> Tuple[Dict[str, Any], List[str]]:
+def runStage1Analysis(
+    rootDir: str, maxFiles: Optional[int] = None
+) -> Tuple[Dict[str, Any], List[str]]:
     """
     Perform directory traversal to extract structure and detect repo health signals.
     Single-threaded I/O walk optimized for speed.
@@ -1151,13 +1844,13 @@ def runStage1Analysis(rootDir: str, maxFiles: Optional[int] = None) -> Tuple[Dic
     fileList = []
 
     for dirpath, dirnames, filenames in os.walk(rootDir):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith('.')]
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
 
         relDir = os.path.relpath(dirpath, rootDir)
         if relDir != ".":
-            structure["dirs"] += 1
+            structure["dirs"] += 1  # type: ignore
 
-        relPathNormalized = relDir.replace('\\', '/').lower()
+        relPathNormalized = relDir.replace("\\", "/").lower()
         for ciDir in CI_DIRECTORIES:
             if ciDir in relPathNormalized:
                 signals["hasCI"] = True
@@ -1168,7 +1861,7 @@ def runStage1Analysis(rootDir: str, maxFiles: Optional[int] = None) -> Tuple[Dic
             basename = os.path.basename(file)
             basenameLower = basename.lower()
 
-            if ext in SKIP_EXTENSIONS or (file.startswith('.') and ext):
+            if ext in SKIP_EXTENSIONS or (file.startswith(".") and ext):
                 continue
 
             filepath = os.path.join(dirpath, file)
@@ -1187,17 +1880,17 @@ def runStage1Analysis(rootDir: str, maxFiles: Optional[int] = None) -> Tuple[Dic
             if classification == "excluded":
                 continue
 
-            structure["files"] += 1
-            structure["extensions"][ext if ext else f".{classification}"] += 1
+            structure["files"] += 1  # type: ignore
+            structure["extensions"][ext if ext else f".{classification}"] += 1  # type: ignore
             fileList.append(filepath)
 
             if not signals["hasSource"] and isCode:
                 signals["hasSource"] = True
 
             lname = file.lower()
-            lpath = filepath.lower().replace('\\', '/')
+            lpath = filepath.lower().replace("\\", "/")
 
-            if 'test' in lname or 'spec' in lname or '/tests/' in lpath:
+            if "test" in lname or "spec" in lname or "/tests/" in lpath:
                 signals["hasTests"] = True
 
             if lname in CONFIG_FILENAMES:
@@ -1209,25 +1902,22 @@ def runStage1Analysis(rootDir: str, maxFiles: Optional[int] = None) -> Tuple[Dic
                 elif any(ciPath in lpath for ciPath in CI_PATH_PATTERNS):
                     signals["hasCI"] = True
 
-            if maxFiles and structure["files"] >= maxFiles:
+            if maxFiles and structure["files"] >= maxFiles:  # type: ignore
                 break
 
-        if maxFiles and structure["files"] >= maxFiles:
+        if maxFiles and structure["files"] >= maxFiles:  # type: ignore
             break
 
-    structure["extensions"] = dict(structure["extensions"])
+    structure["extensions"] = dict(structure["extensions"])  # type: ignore
     structure["test_file_count"] = sum(
-        1 for fp in fileList
+        1
+        for fp in fileList
         if "test" in os.path.basename(fp).lower() or "spec" in os.path.basename(fp).lower()
     )
     fileCount = structure["files"]
-    confidence = "high" if fileCount > 50 else "medium" if fileCount > 10 else "low"
+    confidence = "high" if fileCount > 50 else "medium" if fileCount > 10 else "low"  # type: ignore
 
-    return {
-        "structure": structure,
-        "signals": signals,
-        "confidence": confidence
-    }, fileList
+    return {"structure": structure, "signals": signals, "confidence": confidence}, fileList
 
 
 def getClocCommand() -> str:
@@ -1252,14 +1942,16 @@ def runCloc(repoDir: str, fileList: Optional[List[str]] = None) -> Dict[str, Any
         if fileList:
             # Create a temporary file list for cloc
             import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp:
+
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
                 for f in fileList:
                     tmp.write(f + "\n")
                 tmp_path = tmp.name
 
             cmd.append(f"--list-file={tmp_path}")
-            result = subprocess.run(cmd, cwd=repoDir, capture_output=True,
-                                    text=True, encoding="utf-8", errors="replace")
+            result = subprocess.run(
+                cmd, cwd=repoDir, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            )
             try:
                 os.remove(tmp_path)
             except OSError:
@@ -1282,14 +1974,17 @@ def runCloc(repoDir: str, fileList: Optional[List[str]] = None) -> Dict[str, Any
             if final_skip_dirs:
                 cmd.append(f"--exclude-dir={','.join(final_skip_dirs)}")
             if SKIP_EXTENSIONS:
-                clean_exts = [ext.lstrip('.') for ext in SKIP_EXTENSIONS]
+                clean_exts = [ext.lstrip(".") for ext in SKIP_EXTENSIONS]
                 cmd.append(f"--exclude-ext={','.join(clean_exts)}")
             cmd.append(".")
-            result = subprocess.run(cmd, cwd=repoDir, capture_output=True,
-                                    text=True, encoding="utf-8", errors="replace")
+            result = subprocess.run(
+                cmd, cwd=repoDir, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            )
 
         if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout)
+            parsed = json.loads(result.stdout)
+            if isinstance(parsed, dict):
+                return parsed
     except Exception as e:
         logger.warning(f"[runCloc] Failed to run cloc: {e}")
     return {}
@@ -1318,7 +2013,7 @@ def processFileBatch(batch: List[str]) -> List[Dict[str, Any]]:
             if os.path.getsize(filepath) > MAX_FILE_BYTES:
                 continue
 
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            with open(filepath, encoding="utf-8", errors="ignore") as f:
                 content = f.read()
 
             if not content:
@@ -1332,23 +2027,25 @@ def processFileBatch(batch: List[str]) -> List[Dict[str, Any]]:
 
             # Framework detection via imports (first 100 lines)
             foundFws = []
-            if ext.lstrip('.') in IMPORT_FRAMEWORK_MAP:
+            if ext.lstrip(".") in IMPORT_FRAMEWORK_MAP:
                 lines = content.splitlines()[:100]
                 for line in lines:
                     lineLower = line.lower()
                     if "import " in lineLower or "from " in lineLower or "require(" in lineLower:
-                        for kw, formalName in IMPORT_FRAMEWORK_MAP[ext.lstrip('.')].items():
+                        for kw, formalName in IMPORT_FRAMEWORK_MAP[ext.lstrip(".")].items():
                             if re.search(rf"\b{kw}\b", lineLower):
                                 foundFws.append(formalName)
-            results.append({
-                "filepath": filepath,
-                "llm_tokens": llmTokens,
-                "lexical_tokens": lexicalTokens,
-                "loc": loc,
-                "frameworks": list(set(foundFws)),
-                "hash": hashFile(filepath),
-                "token_set": tokenList
-            })
+            results.append(
+                {
+                    "filepath": filepath,
+                    "llm_tokens": llmTokens,
+                    "lexical_tokens": lexicalTokens,
+                    "loc": loc,
+                    "frameworks": list(set(foundFws)),
+                    "hash": hashFile(filepath),
+                    "token_set": tokenList,
+                }
+            )
         except Exception:
             continue
 
@@ -1356,7 +2053,7 @@ def processFileBatch(batch: List[str]) -> List[Dict[str, Any]]:
 
 
 def runStage2Analysis(
-    fileList: List[str]
+    fileList: List[str],
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, List[str]]]:
     """
     Execute parallel deep analysis to compute total/per-file metrics,
@@ -1368,7 +2065,7 @@ def runStage2Analysis(
 
     numWorkers = getWorkerCount()
     batchSize = getAdaptiveBatchSize(fileList)
-    batches = [fileList[i:i + batchSize] for i in range(0, len(fileList), batchSize)]
+    batches = [fileList[i : i + batchSize] for i in range(0, len(fileList), batchSize)]
 
     logger.info(f"[stage2] Workers={numWorkers}  Batch={batchSize}  Files={len(fileList)}")
 
@@ -1423,7 +2120,9 @@ def runStage2Analysis(
             elapsed = time.time() - t0
             throughput = completedFiles / elapsed if elapsed > 0 else 0
             if completedFiles % 200 == 0:
-                logger.info(f"  → Processed {completedFiles}/{len(fileList)} files  ({throughput:.1f}/s)")
+                logger.info(
+                    f"  → Processed {completedFiles}/{len(fileList)} files  ({throughput:.1f}/s)"
+                )
 
     exactDuplicateTokens = 0
     exactDuplicateCount = 0
@@ -1431,7 +2130,7 @@ def runStage2Analysis(
 
     for h, paths in contentHashes.items():
         if len(paths) > 1:
-            exactDuplicateCount += (len(paths) - 1)
+            exactDuplicateCount += len(paths) - 1
             for dupFile in paths[1:]:
                 exactDuplicateTokens += perFileLlm.get(dupFile, 0)
                 exactDuplicatedFiles.add(dupFile)
@@ -1445,7 +2144,9 @@ def runStage2Analysis(
 
     for key in sizeBuckets:
         if len(sizeBuckets[key]) > MAX_BUCKET_COMPARE:
-            logger.warning(f"[similarity] Pruning bucket of size {len(sizeBuckets[key])} to {MAX_BUCKET_COMPARE}")
+            logger.warning(
+                f"[similarity] Pruning bucket of size {len(sizeBuckets[key])} to {MAX_BUCKET_COMPARE}"
+            )
             sizeBuckets[key] = sizeBuckets[key][:MAX_BUCKET_COMPARE]
 
     for bucketFiles in sizeBuckets.values():
@@ -1503,31 +2204,36 @@ def runStage2Analysis(
     if len(similarClusters) > 0 and similarDuplicateTokens == 0 and exactDuplicateTokens == 0:
         logger.error("[stage2] Inconsistent similarity vs duplication metrics")
 
-    return {
-        "metrics": {
-            "llm_tokens": {"total": totalLlm, "per_file": perFileLlm},
-            "lexical_tokens": {"total": totalLexical, "per_file": perFileLexical},
-            "loc": {"total": totalLoc, "per_file": perFileLoc}
+    return (
+        {
+            "metrics": {
+                "llm_tokens": {"total": totalLlm, "per_file": perFileLlm},
+                "lexical_tokens": {"total": totalLexical, "per_file": perFileLexical},
+                "loc": {"total": totalLoc, "per_file": perFileLoc},
+            },
+            "ratios": {
+                "tokens_per_loc": round(totalLlm / totalLoc if totalLoc else 0, 2),
+                "lexical_to_llm": round(totalLexical / totalLlm if totalLlm else 0, 4),
+            },
+            "duplication_metrics": {
+                "token_weighted": round(tokenWeighted, 4),
+                "duplicate_tokens": totalDuplicateTokens,
+                "exact_duplicate_files": exactDuplicateCount,
+                "similar_clusters": similarClusters,
+            },
+            "file_stats_summary": {"total_files_analyzed": len(fileStatsMap)},
         },
-        "ratios": {
-            "tokens_per_loc": round(totalLlm / totalLoc if totalLoc else 0, 2),
-            "lexical_to_llm": round(totalLexical / totalLlm if totalLlm else 0, 4)
-        },
-        "duplication_metrics": {
-            "token_weighted": round(tokenWeighted, 4),
-            "duplicate_tokens": totalDuplicateTokens,
-            "exact_duplicate_files": exactDuplicateCount,
-            "similar_clusters": similarClusters
-        },
-        "file_stats_summary": {"total_files_analyzed": len(fileStatsMap)}
-    }, fileStatsMap, fileTokensMap, {k: list(v) for k, v in frameworkFindings.items()}
+        fileStatsMap,
+        fileTokensMap,
+        {k: list(v) for k, v in frameworkFindings.items()},
+    )
 
 
 def calculateMeanStd(values: List[float]) -> Tuple[float, float]:
     n = len(values)
     mean = sum(values) / n
     variance = sum((x - mean) ** 2 for x in values) / n
-    return mean, variance ** 0.5
+    return mean, variance**0.5
 
 
 def computeUniformity(fileStats: Dict[str, Any]) -> float:
@@ -1568,9 +2274,7 @@ def calculateTokenSmoothness(fileStats: Dict[str, Any]) -> float:
 
 
 def runAiDetectionAnalysis(
-    fileStats: Dict[str, Any],
-    duplicationMetrics: Dict[str, Any],
-    fileTokensMap: Dict[str, Any]
+    fileStats: Dict[str, Any], duplicationMetrics: Dict[str, Any], fileTokensMap: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Execute AI-generated code detection using multi-signal heuristics.
@@ -1582,7 +2286,8 @@ def runAiDetectionAnalysis(
         return {"repo_score": 0.0, "confidence": "none", "signals": {}}
 
     filteredStats = {
-        f: stats for f, stats in fileStats.items()
+        f: stats
+        for f, stats in fileStats.items()
         if stats["loc"] >= MIN_LOC and stats["llm_tokens"] >= MIN_TOKENS
     }
 
@@ -1596,9 +2301,9 @@ def runAiDetectionAnalysis(
     similarFiles = sum(len(cluster) for cluster in similarClusters)
     similaritySignal = similarFiles / totalFiles if totalFiles > 0 else 0.0
 
-    clusterDensity = max(
-        (len(cluster) / totalFiles) for cluster in similarClusters
-    ) if similarClusters else 0.0
+    clusterDensity = (
+        max((len(cluster) / totalFiles) for cluster in similarClusters) if similarClusters else 0.0
+    )
 
     naming = calculateNamingConsistency(list(filteredStats.keys()))
     smoothness = calculateTokenSmoothness(filteredStats)
@@ -1606,18 +2311,21 @@ def runAiDetectionAnalysis(
     if len(similarClusters) > 0 and duplicationMetrics.get("duplicate_tokens", 0) == 0:
         logger.error("[aiDetection] CRITICAL: similarity exists but duplicate_tokens = 0")
 
-    if duplicationMetrics.get("exact_duplicate_files", 0) > 0 and duplicationMetrics.get("duplicate_tokens", 0) == 0:
+    if (
+        duplicationMetrics.get("exact_duplicate_files", 0) > 0
+        and duplicationMetrics.get("duplicate_tokens", 0) == 0
+    ):
         logger.error("[aiDetection] CRITICAL: exact duplicates not contributing to tokens")
 
     if similaritySignal > 0.8 and duplicationSignal < 0.1:
         logger.error("[aiDetection] CRITICAL: inconsistent similarity vs duplication")
 
     aiScore = (
-        0.30 * duplicationSignal +
-        0.20 * similaritySignal +
-        0.25 * clusterDensity +
-        0.15 * uniformity +
-        0.10 * naming
+        0.30 * duplicationSignal
+        + 0.20 * similaritySignal
+        + 0.25 * clusterDensity
+        + 0.15 * uniformity
+        + 0.10 * naming
     )
     aiScore = max(0.0, min(1.0, aiScore))
 
@@ -1627,7 +2335,9 @@ def runAiDetectionAnalysis(
         isDuplicated = any(file in cluster for cluster in similarClusters)
         perFileScores[file] = min(1.0, (weight * 0.6 + (0.4 if isDuplicated else 0.0)))
 
-    confidence = "high" if len(filteredStats) > 50 else "medium" if len(filteredStats) > 10 else "low"
+    confidence = (
+        "high" if len(filteredStats) > 50 else "medium" if len(filteredStats) > 10 else "low"
+    )
 
     return {
         "repo_score": round(aiScore, 4),
@@ -1638,9 +2348,9 @@ def runAiDetectionAnalysis(
             "similarity": round(similaritySignal, 4),
             "cluster_density": round(clusterDensity, 4),
             "naming": round(naming, 4),
-            "smoothness": round(smoothness, 4)
+            "smoothness": round(smoothness, 4),
         },
-        "per_file_scores": {f: round(s, 4) for f, s in perFileScores.items()}
+        "per_file_scores": {f: round(s, 4) for f, s in perFileScores.items()},
     }
 
 
@@ -1687,9 +2397,7 @@ def getAllContributors(repoDir: str) -> List[Dict[str, Any]]:
 
     contributors: List[Dict[str, Any]] = []
     # Regex: optional leading spaces, commit count, tab, display name + optional <email>
-    lineRe = re.compile(
-        r"^\s*(\d+)\s+(.+?)(?:\s+<([^>]*)>)?\s*$"
-    )
+    lineRe = re.compile(r"^\s*(\d+)\s+(.+?)(?:\s+<([^>]*)>)?\s*$")
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -1794,12 +2502,8 @@ def runStage0GitAnalysis(repoDir: str) -> Dict[str, Any]:
             r"^(wip|fix|fixup!|squash!|update|commit|temp|tmp|test|merge|revert|bump)[\s\.\!]*$",
             re.IGNORECASE,
         )
-        meaningful = sum(
-            1 for m in msgs if len(m) > 10 and not trivial.match(m)
-        )
-        result["meaningful_commit_pct"] = round(
-            meaningful / len(msgs) * 100 if msgs else 0, 1
-        )
+        meaningful = sum(1 for m in msgs if len(m) > 10 and not trivial.match(m))
+        result["meaningful_commit_pct"] = round(meaningful / len(msgs) * 100 if msgs else 0, 1)
         result["total_commits_sampled"] = len(msgs)
 
     rawMerge = runGit(["log", "--all", "--merges", "--format=%H"], repoDir)
@@ -1860,7 +2564,7 @@ def runStage0GitAnalysis(repoDir: str) -> Dict[str, Any]:
             prefixes = ["remotes/origin/", "origin/", "refs/heads/", "refs/remotes/origin/"]
             for prefix in prefixes:
                 if line.startswith(prefix):
-                    line = line[len(prefix):]
+                    line = line[len(prefix) :]
                     break
             if line:
                 uniqueBranches.add(line)
@@ -1873,9 +2577,7 @@ def runStage0GitAnalysis(repoDir: str) -> Dict[str, Any]:
     return result
 
 
-def computeLanguageBreakdown(
-    fileList: List[str], perFileLoc: Dict[str, int]
-) -> Dict[str, Any]:
+def computeLanguageBreakdown(fileList: List[str], perFileLoc: Dict[str, int]) -> Dict[str, Any]:
     """
     Map every analysed file to a display language name using EXT_TO_LANGUAGE.
     Returns per-language LOC counts, file counts, and percentage shares.
@@ -1888,6 +2590,7 @@ def computeLanguageBreakdown(
     for fp in fileList:
         ext = os.path.splitext(fp)[1].lower()
         name = os.path.basename(fp).lower()
+        lang: Optional[str]
         if not ext and name in SPECIAL_CODE_FILES:
             lang = name.capitalize()
         else:
@@ -1906,15 +2609,15 @@ def computeLanguageBreakdown(
     for lang, loc in sorted(langLoc.items(), key=lambda x: -x[1]):
         pct = round(loc / totalLoc * 100, 2) if totalLoc else 0.0
         breakdown[lang] = {
-            "loc":   loc,
+            "loc": loc,
             "files": langFiles[lang],
-            "pct":   pct,
+            "pct": pct,
         }
 
     return {
-        "languages":      list(breakdown.keys()),
+        "languages": list(breakdown.keys()),
         "language_count": len(breakdown),
-        "breakdown":      breakdown,
+        "breakdown": breakdown,
     }
 
 
@@ -1933,7 +2636,7 @@ def detectFrameworks(repoDir: str) -> Dict[str, List[str]]:
             if manifest in files:
                 manifestPath = os.path.join(root, manifest)
                 try:
-                    with open(manifestPath, "r", encoding="utf-8", errors="ignore") as f:
+                    with open(manifestPath, encoding="utf-8", errors="ignore") as f:
                         content = f.read().lower()
                     found = [kw for kw in keywords if kw in content]
                     if found:
@@ -1966,11 +2669,9 @@ def analyzeCodeAge(repoDir: str, fileList: List[str]) -> Dict[str, Any]:
         return result
 
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-    buckets: Dict[str, int] = {
-        "<6m": 0, "6m-1yr": 0, "1yr-2yr": 0, ">2yr": 0
-    }
+    buckets: Dict[str, int] = {"<6m": 0, "6m-1yr": 0, "1yr-2yr": 0, ">2yr": 0}
     sample = fileList[:500]
-    ages: List[float] = []          # age in months
+    ages: List[float] = []  # age in months
 
     for fp in sample:
         rel = os.path.relpath(fp, repoDir)
@@ -2003,20 +2704,22 @@ def analyzeCodeAge(repoDir: str, fileList: List[str]) -> Dict[str, Any]:
     old_1yr = sum(1 for a in ages if a > 12)
     old_2yr = sum(1 for a in ages if a > 24)
 
-    result.update({
-        "available": True,
-        "sampled_files": total,
-        "pct_untouched_1yr": round(old_1yr / total * 100, 1),
-        "pct_untouched_2yr": round(old_2yr / total * 100, 1),
-        "median_age_months": round(sorted(ages)[total // 2], 1),
-        "age_distribution": buckets,
-    })
+    result.update(
+        {
+            "available": True,
+            "sampled_files": total,
+            "pct_untouched_1yr": round(old_1yr / total * 100, 1),
+            "pct_untouched_2yr": round(old_2yr / total * 100, 1),
+            "median_age_months": round(sorted(ages)[total // 2], 1),
+            "age_distribution": buckets,
+        }
+    )
     return result
 
 
 def detectInfrastructure(repoDir: str) -> Dict[str, List[str]]:
     """Scan manifests and files for DBs, Deployment tools, and API usage recursively."""
-    found = {"databases": set(), "deployment": set(), "apis": set()}
+    found = {"databases": set(), "deployment": set(), "apis": set()}  # type: ignore
 
     for root, _, files in os.walk(repoDir):
         if any(sd in root for sd in SKIP_DIRS):
@@ -2026,7 +2729,7 @@ def detectInfrastructure(repoDir: str) -> Dict[str, List[str]]:
             if m in files:
                 path = os.path.join(root, m)
                 try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    with open(path, encoding="utf-8", errors="ignore") as f:
                         content = f.read().lower()
                         for cat, keywords in INFRASTRUCTURE_INDICATORS.items():
                             for k in keywords:
@@ -2036,7 +2739,10 @@ def detectInfrastructure(repoDir: str) -> Dict[str, List[str]]:
                         # Special Firebase Logic
                         if "firebase" in content:
                             found["apis"].add("firebase")
-                            if any(x in content for x in ["firestore", "firebase-database", "realtime-database"]):
+                            if any(
+                                x in content
+                                for x in ["firestore", "firebase-database", "realtime-database"]
+                            ):
                                 found["databases"].add("firebase")
                 except Exception:
                     pass
@@ -2045,7 +2751,7 @@ def detectInfrastructure(repoDir: str) -> Dict[str, List[str]]:
             if cf in files:
                 path = os.path.join(root, cf)
                 try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    with open(path, encoding="utf-8", errors="ignore") as f:
                         content = f.read().lower()
                         for prefix, db_name in INFRA_CONN_MAP.items():
                             if prefix in content:
@@ -2053,15 +2759,15 @@ def detectInfrastructure(repoDir: str) -> Dict[str, List[str]]:
                 except Exception:
                     pass
 
-        for f in files:
-            ext = os.path.splitext(f)[1].lower()
+        for f in files:  # type: ignore
+            ext = os.path.splitext(f)[1].lower()  # type: ignore
             if ext in INFRA_DB_EXTENSIONS:
                 found["databases"].add(f"Physical DB: {f}")
 
             if ext in INFRA_CODE_EXTENSIONS:
-                path = os.path.join(root, f)
+                path = os.path.join(root, f)  # type: ignore
                 try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as code_f:
+                    with open(path, encoding="utf-8", errors="ignore") as code_f:
                         head = "".join([code_f.readline() for _ in range(300)]).lower()
 
                         for cat, keywords in INFRASTRUCTURE_INDICATORS.items():
@@ -2073,7 +2779,7 @@ def detectInfrastructure(repoDir: str) -> Dict[str, List[str]]:
                                     rf"\bfrom\s+{re.escape(k)}\b",
                                     rf"require\(['\"]{re.escape(k)}['\"]",
                                     rf"\b{re.escape(k)}://",
-                                    rf"\bnew\s+{re.escape(k)}\("
+                                    rf"\bnew\s+{re.escape(k)}\(",
                                 ]
                                 if any(re.search(p, head) for p in patterns):
                                     found[cat].add(k)
@@ -2093,8 +2799,8 @@ def detectInfrastructure(repoDir: str) -> Dict[str, List[str]]:
             if d == ".github":
                 if os.path.exists(os.path.join(root, d, "workflows")):
                     found["deployment"].add("github actions")
-        for f in files:
-            f_lower = f.lower()
+        for f in files:  # type: ignore
+            f_lower = f.lower()  # type: ignore
             for key, (cat, val) in INFRA_FILE_MAP.items():
                 if key in f_lower:
                     found[cat].add(val)
@@ -2152,7 +2858,7 @@ def isVendoredOrGenerated(filepath: str, filename: str) -> bool:
     # 6. Large single-line files (machine-generated) — check first 4KB
     try:
         if os.path.getsize(filepath) > 1024 * 1024:  # > 1MB
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as fh:
+            with open(filepath, encoding="utf-8", errors="ignore") as fh:
                 sample = fh.read(4096)
                 if sample and "\n" not in sample.strip() and len(sample) >= 4000:
                     return True
@@ -2168,20 +2874,24 @@ def calculateByteBreakdown(repoDir: str) -> Dict[str, int]:
     Excludes: minified files, vendored libraries, generated bundles,
     source maps, and machine-generated single-line files.
     """
-    byte_counts = {}
+    byte_counts = {}  # type: ignore
     for root, dirs, files in os.walk(repoDir):
         # Prune skip directories and virtual environments
         def _is_venv_dir(d, parent):
             candidate = os.path.join(parent, d)
-            return (os.path.isdir(os.path.join(candidate, "Lib", "site-packages")) or
-                    os.path.isdir(os.path.join(candidate, "lib", "python3.10", "site-packages")) or
-                    os.path.isdir(os.path.join(candidate, "lib", "python3.11", "site-packages")) or
-                    os.path.isdir(os.path.join(candidate, "lib", "python3.12", "site-packages")) or
-                    os.path.isfile(os.path.join(candidate, "pyvenv.cfg")))
+            return (
+                os.path.isdir(os.path.join(candidate, "Lib", "site-packages"))
+                or os.path.isdir(os.path.join(candidate, "lib", "python3.10", "site-packages"))
+                or os.path.isdir(os.path.join(candidate, "lib", "python3.11", "site-packages"))
+                or os.path.isdir(os.path.join(candidate, "lib", "python3.12", "site-packages"))
+                or os.path.isfile(os.path.join(candidate, "pyvenv.cfg"))
+            )
 
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS
-                   and not d.startswith('.')
-                   and not _is_venv_dir(d, root)]
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in SKIP_DIRS and not d.startswith(".") and not _is_venv_dir(d, root)
+        ]
         for f in files:
             ext = os.path.splitext(f)[1].lower()
             if ext not in EXT_TO_LANG_MAP:
@@ -2199,35 +2909,35 @@ def calculateByteBreakdown(repoDir: str) -> Dict[str, int]:
             try:
                 size = os.path.getsize(filepath)
                 # Quick scan for identity (first 50 lines)
-                if ext in {'.py', '.js', '.jsx', '.ts', '.tsx'}:
-                    with open(filepath, "r", encoding="utf-8", errors="ignore") as f_obj:
+                if ext in {".py", ".js", ".jsx", ".ts", ".tsx"}:
+                    with open(filepath, encoding="utf-8", errors="ignore") as f_obj:
                         head = [f_obj.readline().lower() for _ in range(50)]
 
                     content_head = "".join(head)
                     found_id = None
 
                     # Framework mapping logic
-                    if ext == '.py':
-                        if 'django' in content_head:
+                    if ext == ".py":
+                        if "django" in content_head:
                             found_id = "Django (Python)"
-                        elif 'flask' in content_head:
+                        elif "flask" in content_head:
                             found_id = "Flask (Python)"
-                        elif 'fastapi' in content_head:
+                        elif "fastapi" in content_head:
                             found_id = "FastAPI (Python)"
-                        elif 'tornado' in content_head:
+                        elif "tornado" in content_head:
                             found_id = "Tornado (Python)"
-                        elif 'aiohttp' in content_head:
+                        elif "aiohttp" in content_head:
                             found_id = "aiohttp (Python)"
-                    elif ext in {'.js', '.jsx', '.ts', '.tsx'}:
-                        if 'next' in content_head:
+                    elif ext in {".js", ".jsx", ".ts", ".tsx"}:
+                        if "next" in content_head:
                             found_id = f"Next.js ({base_lang})"
-                        elif 'react' in content_head:
+                        elif "react" in content_head:
                             found_id = f"React ({base_lang})"
-                        elif 'vue' in content_head:
+                        elif "vue" in content_head:
                             found_id = f"Vue ({base_lang})"
-                        elif 'express' in content_head:
+                        elif "express" in content_head:
                             found_id = f"Express ({base_lang})"
-                        elif 'jest' in content_head:
+                        elif "jest" in content_head:
                             found_id = f"Jest ({base_lang})"
 
                     if found_id:
@@ -2261,8 +2971,8 @@ def analyzeDocumentation(repoDir: str) -> Dict[str, Any]:
 
     if readmePath:
         try:
-            with open(readmePath, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
+            with open(readmePath, encoding="utf-8", errors="ignore") as f:  # type: ignore
+                content = f.read()  # type: ignore
                 lines = content.splitlines()
 
                 # Simple description (first non-header paragraph)
@@ -2312,7 +3022,7 @@ def estimateTestCases(fileList: List[str]) -> int:
     testFiles = [f for f in fileList if "test" in f.lower() or "spec" in f.lower()]
 
     for path in testFiles[:200]:  # Limit scan to first 200 test files for speed
-        ext = path.split('.')[-1].lower()
+        ext = path.split(".")[-1].lower()
         pattern = None
         if ext == "py":
             pattern = TEST_CASE_PATTERNS["python"]
@@ -2331,7 +3041,7 @@ def estimateTestCases(fileList: List[str]) -> int:
 
         if pattern:
             try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                with open(path, encoding="utf-8", errors="ignore") as f:
                     content = f.read()
                     count += len(pattern.findall(content))
             except Exception:
@@ -2379,19 +3089,19 @@ def detectOpenSource(repoDir: str) -> Dict[str, Any]:
 
             # LICENSE detection
             if f_lower in OPENSOURCE_LICENSE_FILES:
-                result["license_file"] = f
+                result["license_file"] = f  # type: ignore
                 license_path = os.path.join(root, f)
                 try:
-                    with open(license_path, "r", encoding="utf-8", errors="ignore") as f_obj:
+                    with open(license_path, encoding="utf-8", errors="ignore") as f_obj:
                         content = f_obj.read(2000).lower()
                     for indicator in OPENSOURCE_SPDX_INDICATORS:
                         if indicator in content:
                             result["is_open_source"] = True
-                            result["license_type"] = indicator.title()
+                            result["license_type"] = indicator.title()  # type: ignore
                             break
                     else:
                         result["is_open_source"] = True
-                        result["license_type"] = "Unknown (license file present)"
+                        result["license_type"] = "Unknown (license file present)"  # type: ignore
                 except Exception:
                     result["is_open_source"] = True
 
@@ -2424,9 +3134,9 @@ def computeRepoRating(
         if value >= pref:
             return 1.0
         if value >= mn:
-            return 0.5 + 0.5 * (value - mn) / max(pref - mn, 1)
+            return 0.5 + 0.5 * (value - mn) / max(pref - mn, 1)  # type: ignore
         if value > 0:
-            return 0.5 * value / max(mn, 1)
+            return 0.5 * value / max(mn, 1)  # type: ignore
         return 0.0
 
     scores["commits"] = _score(gitData.get("commit_count", 0), "commits")
@@ -2441,34 +3151,34 @@ def computeRepoRating(
     scores["test_file_count"] = _score(test_file_count, "test_file_count")
     # Source file ratio
     total_files = structure.get("files", 0)
-    lang_files_total = sum(
-        v["files"] for v in langData.get("breakdown", {}).values()
-    )
+    lang_files_total = sum(v["files"] for v in langData.get("breakdown", {}).values())
     src_ratio = lang_files_total / total_files if total_files > 0 else 0.0
     scores["source_file_ratio"] = _score(src_ratio, "source_file_ratio")
     # Weighted total
-    weighted = sum(
-        scores[k] * RATING_CRITERIA[k]["weight"]
-        for k in scores
-    )
+    weighted = sum(scores[k] * RATING_CRITERIA[k]["weight"] for k in scores)
     rating_10 = round(weighted * 10, 2)
 
     label = (
-        "Excellent" if rating_10 >= 8 else
-        "Good" if rating_10 >= 6 else
-        "Fair" if rating_10 >= 4 else
-        "Poor"
+        "Excellent"
+        if rating_10 >= 8
+        else "Good"
+        if rating_10 >= 6
+        else "Fair"
+        if rating_10 >= 4
+        else "Poor"
     )
     return {
-        "rating":       rating_10,
-        "label":        label,
+        "rating": rating_10,
+        "label": label,
         "component_scores": {k: round(v, 4) for k, v in scores.items()},
-        "meets_minimum": all([
-            gitData.get("commit_count", 0) >= RATING_CRITERIA["commits"]["min"],
-            gitData.get("unique_contributors", 0) >= RATING_CRITERIA["contributors"]["min"],
-            loc >= RATING_CRITERIA["loc"]["min"],
-            signals.get("hasTests", False),
-        ]),
+        "meets_minimum": all(
+            [
+                gitData.get("commit_count", 0) >= RATING_CRITERIA["commits"]["min"],
+                gitData.get("unique_contributors", 0) >= RATING_CRITERIA["contributors"]["min"],
+                loc >= RATING_CRITERIA["loc"]["min"],
+                signals.get("hasTests", False),
+            ]
+        ),
     }
 
 
@@ -2490,9 +3200,9 @@ def scanSecrets(fileList: List[str]) -> Dict[str, Any]:
                 continue
 
         try:
-            if os.path.getsize(fp) > 500_000:   # skip files > 500KB
+            if os.path.getsize(fp) > 500_000:  # skip files > 500KB
                 continue
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+            with open(fp, encoding="utf-8", errors="ignore") as f:
                 content = f.read()
         except Exception:
             continue
@@ -2500,24 +3210,24 @@ def scanSecrets(fileList: List[str]) -> Dict[str, Any]:
         scanned += 1
         for secret_type, pattern in SECRET_PATTERNS:
             if pattern.search(content):
-                findings.append({
-                    "file": os.path.basename(fp),
-                    "path": fp,
-                    "type": secret_type,
-                })
+                findings.append(
+                    {
+                        "file": os.path.basename(fp),
+                        "path": fp,
+                        "type": secret_type,
+                    }
+                )
                 break
 
     return {
-        "files_scanned":   scanned,
-        "findings_count":  len(findings),
-        "findings":        findings,
-        "clean":           len(findings) == 0,
-        "risk_level": (
-            "high" if len(findings) >= 5 else
-            "medium" if len(findings) >= 1 else
-            "low"
-        ),
+        "files_scanned": scanned,
+        "findings_count": len(findings),
+        "findings": findings,
+        "clean": len(findings) == 0,
+        "risk_level": ("high" if len(findings) >= 5 else "medium" if len(findings) >= 1 else "low"),
     }
+
+
 def extractAzureDevOpsRepoInfo(targetDir: str, inputTarget: str) -> Optional[Tuple[str, str, str]]:
     """
     Extracts (org, project, repo) from Azure DevOps inputTarget or git remote.
@@ -2532,20 +3242,24 @@ def extractAzureDevOpsRepoInfo(targetDir: str, inputTarget: str) -> Optional[Tup
     for cand in candidates:
         if not cand:
             continue
-        clean_cand = re.sub(r'https://[^/@]+@', 'https://', cand)
-        
-        m = re.search(r'dev\.azure\.com/([^/]+)/([^/]+)/_git/([^/]+)', clean_cand, re.IGNORECASE)
+        clean_cand = re.sub(r"https://[^/@]+@", "https://", cand)
+
+        m = re.search(r"dev\.azure\.com/([^/]+)/([^/]+)/_git/([^/]+)", clean_cand, re.IGNORECASE)
         if m:
             org = m.group(1)
             project = m.group(2)
-            repo = m.group(3).replace('.git', '')
+            repo = m.group(3).replace(".git", "")
             return (org, project, repo)
-            
-        m2 = re.search(r'([^/]+)\.visualstudio\.com/(?:DefaultCollection/)?([^/]+)/_git/([^/]+)', clean_cand, re.IGNORECASE)
+
+        m2 = re.search(
+            r"([^/]+)\.visualstudio\.com/(?:DefaultCollection/)?([^/]+)/_git/([^/]+)",
+            clean_cand,
+            re.IGNORECASE,
+        )
         if m2:
             org = m2.group(1)
             project = m2.group(2)
-            repo = m2.group(3).replace('.git', '')
+            repo = m2.group(3).replace(".git", "")
             return (org, project, repo)
 
     return None
@@ -2583,10 +3297,7 @@ def runAzureDevOpsPrAnalysis(
         return defaults
 
     url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/pullrequests?searchCriteria.status=all&api-version=7.0"
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Repo-Analysis-Tool/3.0"
-    }
+    headers = {"Accept": "application/json", "User-Agent": "Repo-Analysis-Tool/3.0"}
     auth_str = f":{final_token}"
     b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
     headers["Authorization"] = f"Basic {b64_auth}"
@@ -2596,7 +3307,7 @@ def runAzureDevOpsPrAnalysis(
         with urllib.request.urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             prs = data.get("value", [])
-            
+
             total_count = len(prs)
             open_count = sum(1 for pr in prs if pr.get("status") == "active")
             closed_count = sum(1 for pr in prs if pr.get("status") in ("abandoned", "completed"))
@@ -2614,16 +3325,17 @@ def runAzureDevOpsPrAnalysis(
         return defaults
 
 
-def enrichViaAzureDevOpsApi(azure_info: Tuple[str, str, str], token: Optional[str]) -> Dict[str, Any]:
+def enrichViaAzureDevOpsApi(
+    azure_info: Tuple[str, str, str], token: Optional[str]
+) -> Dict[str, Any]:
     """
     Enriches repository metadata via Azure DevOps REST API.
     """
     org, project, repo_name = azure_info
-    url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}?api-version=7.0"
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Repo-Analysis-Tool/3.0"
-    }
+    url = (
+        f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}?api-version=7.0"
+    )
+    headers = {"Accept": "application/json", "User-Agent": "Repo-Analysis-Tool/3.0"}
     if token:
         auth_str = f":{token}"
         b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
@@ -2642,7 +3354,7 @@ def enrichViaAzureDevOpsApi(azure_info: Tuple[str, str, str], token: Optional[st
                 "description": f"Azure DevOps Repo in project '{project}'",
                 "web_url": data.get("webUrl", ""),
                 "size_kb": data.get("size", 0) // 1024 if data.get("size") else 0,
-                "platform": "azure_devops"
+                "platform": "azure_devops",
             }
     except Exception as e:
         logger.warning(f"Azure DevOps API enrichment failed: {e}")
@@ -2653,7 +3365,7 @@ def enrichViaAzureDevOpsApi(azure_info: Tuple[str, str, str], token: Optional[st
             "subscribers": 0,
             "default_branch": "main",
             "description": f"Azure DevOps Repo '{repo_name}'",
-            "platform": "azure_devops"
+            "platform": "azure_devops",
         }
 
 
@@ -2663,10 +3375,11 @@ def extractGitLabRepoInfo(targetDir: str, inputTarget: str) -> Optional[Tuple[st
     Returns: (domain, project_path, project_name)
     """
     import urllib.parse
+
     for candidate in [inputTarget, targetDir]:
         if not candidate:
             continue
-            
+
         # 1. Handle HTTP/HTTPS URLs (including ones with embedded oauth2 tokens/passwords)
         if candidate.startswith("http://") or candidate.startswith("https://"):
             try:
@@ -2680,7 +3393,7 @@ def extractGitLabRepoInfo(targetDir: str, inputTarget: str) -> Optional[Tuple[st
                     return hostname, path, name
             except Exception:
                 pass
-                
+
         # 2. Handle SSH and other Git URL formats (e.g. git@gitlab.com:org/repo.git)
         else:
             if "gitlab" in candidate.lower():
@@ -2688,8 +3401,8 @@ def extractGitLabRepoInfo(targetDir: str, inputTarget: str) -> Optional[Tuple[st
                     parts = candidate.split("@", 1)[1]
                 else:
                     parts = candidate
-                
-                m = re.split(r'[:/]', parts, 1)
+
+                m = re.split(r"[:/]", parts, 1)
                 if len(m) == 2:
                     domain = m[0]
                     path = m[1]
@@ -2711,6 +3424,7 @@ def callGitLabApi(url: str, headers: dict, params: Optional[dict] = None) -> Opt
     Executes a GitLab API request with rate limit handling and retries.
     """
     import requests
+
     retries = 0
     max_retries = 5
     backoff = 2
@@ -2721,31 +3435,44 @@ def callGitLabApi(url: str, headers: dict, params: Optional[dict] = None) -> Opt
                 return response
             elif response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
-                sleep_time = int(retry_after) if retry_after and retry_after.isdigit() else (backoff ** retries)
+                sleep_time = (
+                    int(retry_after)
+                    if retry_after and retry_after.isdigit()
+                    else (backoff**retries)
+                )
                 logger.warning(f"GitLab API rate limit hit. Sleeping for {sleep_time} seconds...")
                 time.sleep(sleep_time)
                 retries += 1
             elif response.status_code in [500, 502, 503, 504]:
-                sleep_time = backoff ** retries
-                logger.warning(f"GitLab API server error ({response.status_code}). Retrying in {sleep_time} seconds...")
+                sleep_time = backoff**retries
+                logger.warning(
+                    f"GitLab API server error ({response.status_code}). Retrying in {sleep_time} seconds..."
+                )
                 time.sleep(sleep_time)
                 retries += 1
             else:
-                logger.error(f"GitLab API request failed with status code {response.status_code}: {response.text}")
+                logger.error(
+                    f"GitLab API request failed with status code {response.status_code}: {response.text}"
+                )
                 return None
         except requests.RequestException as e:
-            sleep_time = backoff ** retries
-            logger.warning(f"Network error during GitLab API call: {e}. Retrying in {sleep_time} seconds...")
+            sleep_time = backoff**retries
+            logger.warning(
+                f"Network error during GitLab API call: {e}. Retrying in {sleep_time} seconds..."
+            )
             time.sleep(sleep_time)
             retries += 1
     return None
 
 
-def fetchGitLabMergeRequests(domain: str, project_path: str, token: Optional[str]) -> List[Dict[str, Any]]:
+def fetchGitLabMergeRequests(
+    domain: str, project_path: str, token: Optional[str]
+) -> List[Dict[str, Any]]:
     """
     Fetch all Merge Requests for the repository using GitLab API, paginating.
     """
     import urllib.parse
+
     mr_list = []
     logger.info("Fetching GitLab Merge Requests...")
 
@@ -2756,11 +3483,7 @@ def fetchGitLabMergeRequests(domain: str, project_path: str, token: Optional[str
     encoded_path = urllib.parse.quote_plus(project_path)
     url = f"https://{domain}/api/v4/projects/{encoded_path}/merge_requests"
 
-    params = {
-        "state": "all",
-        "per_page": 100,
-        "page": 1
-    }
+    params = {"state": "all", "per_page": 100, "page": 1}
 
     while True:
         logger.info(f"Fetching GitLab MRs page {params['page']}...")
@@ -2785,7 +3508,9 @@ def fetchGitLabMergeRequests(domain: str, project_path: str, token: Optional[str
                 "updated_at": mr.get("updated_at"),
                 "closed_at": mr.get("closed_at"),
                 "merged_at": merged_at,
-                "user": {"login": mr.get("author", {}).get("username")} if mr.get("author") else None,
+                "user": {"login": mr.get("author", {}).get("username")}
+                if mr.get("author")
+                else None,
                 "html_url": mr.get("web_url"),
                 "additions": None,
                 "deletions": None,
@@ -2799,10 +3524,10 @@ def fetchGitLabMergeRequests(domain: str, project_path: str, token: Optional[str
         next_page = response.headers.get("X-Next-Page")
         if next_page and next_page.strip():
             params["page"] = int(next_page)
-        elif len(data) < params["per_page"]:
+        elif len(data) < params["per_page"]:  # type: ignore
             break
         else:
-            params["page"] += 1
+            params["page"] += 1  # type: ignore
 
     return mr_list
 
@@ -2859,6 +3584,7 @@ def enrichViaGitLabApi(
     Optional GitLab API enrichment.
     """
     import urllib.parse
+
     headers = {}
     if token:
         headers["PRIVATE-TOKEN"] = token
@@ -2872,14 +3598,14 @@ def enrichViaGitLabApi(
 
     try:
         project = response.json()
-        
+
         created_at_str = "N/A"
         if project.get("created_at"):
             try:
                 created_at_str = project.get("created_at").split("T")[0]
             except Exception:
                 pass
-                
+
         pushed_at_str = "N/A"
         if project.get("last_activity_at"):
             try:
@@ -2894,24 +3620,24 @@ def enrichViaGitLabApi(
         size_kb = size_bytes // 1024 if size_bytes else 0
 
         return {
-            "available":       True,
-            "full_name":       project.get("path_with_namespace"),
-            "owner":           project.get("namespace", {}).get("path"),
-            "description":     project.get("description"),
-            "is_private":      project.get("visibility") == "private",
-            "is_fork":         project.get("forked_from_project") is not None,
-            "stars":           project.get("star_count", 0),
-            "forks":           project.get("forks_count", 0),
-            "open_issues":     project.get("open_issues_count", 0),
-            "topics":          project.get("topics", project.get("tag_list", [])),
-            "default_branch":  project.get("default_branch"),
-            "created_at":      created_at_str,
-            "pushed_at":       pushed_at_str,
-            "size_kb":         size_kb,
-            "license":         license_spdx,
-            "language":        None,
-            "subscribers":     None,
-            "visibility":      project.get("visibility"),
+            "available": True,
+            "full_name": project.get("path_with_namespace"),
+            "owner": project.get("namespace", {}).get("path"),
+            "description": project.get("description"),
+            "is_private": project.get("visibility") == "private",
+            "is_fork": project.get("forked_from_project") is not None,
+            "stars": project.get("star_count", 0),
+            "forks": project.get("forks_count", 0),
+            "open_issues": project.get("open_issues_count", 0),
+            "topics": project.get("topics", project.get("tag_list", [])),
+            "default_branch": project.get("default_branch"),
+            "created_at": created_at_str,
+            "pushed_at": pushed_at_str,
+            "size_kb": size_kb,
+            "license": license_spdx,
+            "language": None,
+            "subscribers": None,
+            "visibility": project.get("visibility"),
         }
     except Exception as exc:
         return {"available": False, "reason": str(exc)}
@@ -2999,24 +3725,30 @@ def callWithRetry(g: Github, func, *args, max_retries=5, **kwargs):
             handleRateLimit(g)
             return func(*args, **kwargs)
         except RateLimitExceededException:
-            logger.warning("Rate limit exceeded during GitHub API call. Checking/sleeping for reset...")
+            logger.warning(
+                "Rate limit exceeded during GitHub API call. Checking/sleeping for reset..."
+            )
             handleRateLimit(g)
             retries += 1
         except GithubException as e:
             if getattr(e, "status", None) == 403 and "abuse" in str(e).lower():
-                sleep_time = backoff ** retries
-                logger.warning(f"GitHub abuse detection triggered. Sleeping for {sleep_time} seconds...")
+                sleep_time = backoff**retries
+                logger.warning(
+                    f"GitHub abuse detection triggered. Sleeping for {sleep_time} seconds..."
+                )
                 time.sleep(sleep_time)
                 retries += 1
             elif getattr(e, "status", None) in [500, 502, 503, 504]:
-                sleep_time = backoff ** retries
-                logger.warning(f"GitHub API server error ({e.status}). Retrying in {sleep_time} seconds...")
+                sleep_time = backoff**retries
+                logger.warning(
+                    f"GitHub API server error ({e.status}). Retrying in {sleep_time} seconds..."
+                )
                 time.sleep(sleep_time)
                 retries += 1
             else:
                 raise e
         except Exception as e:
-            sleep_time = backoff ** retries
+            sleep_time = backoff**retries
             logger.warning(f"Unexpected GitHub API error: {e}. Retrying in {sleep_time} seconds...")
             time.sleep(sleep_time)
             retries += 1
@@ -3052,17 +3784,19 @@ def fetchPullRequests(g: Github, repo) -> List[Dict[str, Any]]:
         except Exception:
             pass
 
-        pr_dict.update({
-            "number": pr.number,
-            "title": pr.title,
-            "state": pr.state,
-            "created_at": pr.created_at.isoformat() if pr.created_at else None,
-            "updated_at": pr.updated_at.isoformat() if pr.updated_at else None,
-            "closed_at": pr.closed_at.isoformat() if pr.closed_at else None,
-            "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
-            "user": {"login": pr.user.login} if pr.user else None,
-            "html_url": pr.html_url,
-        })
+        pr_dict.update(
+            {
+                "number": pr.number,
+                "title": pr.title,
+                "state": pr.state,
+                "created_at": pr.created_at.isoformat() if pr.created_at else None,
+                "updated_at": pr.updated_at.isoformat() if pr.updated_at else None,
+                "closed_at": pr.closed_at.isoformat() if pr.closed_at else None,
+                "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
+                "user": {"login": pr.user.login} if pr.user else None,
+                "html_url": pr.html_url,
+            }
+        )
 
         # Detailed attributes: additions, deletions, changed_files, commits, comments, review_comments
         # Only fetch details if rate limit allows
@@ -3074,15 +3808,18 @@ def fetchPullRequests(g: Github, repo) -> List[Dict[str, Any]]:
 
             # If remaining rate limit is low (e.g. < 150), skip detailed fetch
             if remaining < 150:
-                pr_dict.update({
-                    "additions": None,
-                    "deletions": None,
-                    "changed_files": None,
-                    "comments": None,
-                    "review_comments": None,
-                    "commits": None,
-                })
+                pr_dict.update(
+                    {
+                        "additions": None,
+                        "deletions": None,
+                        "changed_files": None,
+                        "comments": None,
+                        "review_comments": None,
+                        "commits": None,
+                    }
+                )
             else:
+
                 def _fetch_details():
                     # Accessing additions triggers the detailed GET request
                     # Use getattr with default to avoid attribute errors
@@ -3095,9 +3832,10 @@ def fetchPullRequests(g: Github, repo) -> List[Dict[str, Any]]:
                     review_comments = getattr(pr, "review_comments", None)
                     return (additions, deletions, changed_files, commits, comments, review_comments)
 
-                additions, deletions, changed_files, commits, comments, review_comments = callWithRetry(
-                    g, _fetch_details)
-                
+                additions, deletions, changed_files, commits, comments, review_comments = (
+                    callWithRetry(g, _fetch_details)
+                )
+
                 # Handle PaginatedList - extract totalCount if available
                 def _get_total_count(obj):
                     if obj is None:
@@ -3111,25 +3849,29 @@ def fetchPullRequests(g: Github, repo) -> List[Dict[str, Any]]:
                             return None
                     return obj
 
-                pr_dict.update({
-                    "additions": additions,
-                    "deletions": deletions,
-                    "changed_files": changed_files,
-                    "commits": _get_total_count(commits),
-                    "comments": _get_total_count(comments),
-                    "review_comments": _get_total_count(review_comments),
-                })
+                pr_dict.update(
+                    {
+                        "additions": additions,
+                        "deletions": deletions,
+                        "changed_files": changed_files,
+                        "commits": _get_total_count(commits),
+                        "comments": _get_total_count(comments),
+                        "review_comments": _get_total_count(review_comments),
+                    }
+                )
         except Exception as e:
             logger.debug(f"Failed to fetch PR details for #{pr.number}: {e}")
             # Fallback to None/safe defaults for detailed fields on error
-            pr_dict.update({
-                "additions": None,
-                "deletions": None,
-                "changed_files": None,
-                "comments": None,
-                "review_comments": None,
-                "commits": None,
-            })
+            pr_dict.update(
+                {
+                    "additions": None,
+                    "deletions": None,
+                    "changed_files": None,
+                    "comments": None,
+                    "review_comments": None,
+                    "commits": None,
+                }
+            )
 
         pr_list.append(pr_dict)
 
@@ -3178,7 +3920,9 @@ def dumpPrJsonFiles(outputDir: str, sanitizedRepoName: str, prs: List[Dict[str, 
 
     open_prs = [pr for pr in prs if pr.get("state") == "open"]
     closed_prs = [pr for pr in prs if pr.get("state") == "closed"]
-    merged_prs = [pr for pr in prs if pr.get("state") == "closed" and pr.get("merged_at") is not None]
+    merged_prs = [
+        pr for pr in prs if pr.get("state") == "closed" and pr.get("merged_at") is not None
+    ]
 
     files_to_write = {
         f"all_prs_{sanitizedRepoName}.json": prs,
@@ -3238,11 +3982,12 @@ def runGitHubPrAnalysis(
     try:
         try:
             from github import Auth
+
             auth = Auth.Token(final_token)
             g = Github(auth=auth)
         except (ImportError, AttributeError):
             g = Github(final_token)
-        
+
         # Test API access and get rate limit
         try:
             core = getCoreRateLimit(g)
@@ -3287,38 +4032,41 @@ def enrichViaGithubApi(
     try:
         try:
             from github import Auth
+
             auth = Auth.Token(token)
             g = Github(auth=auth)
         except (ImportError, AttributeError):
             g = Github(token)
-        
+
         # Check rate limit before making requests
         core = getCoreRateLimit(g)
         if core and core.remaining < 10:
-            logger.warning(f"Rate limit too low for enrichment ({core.remaining} remaining). Skipping.")
+            logger.warning(
+                f"Rate limit too low for enrichment ({core.remaining} remaining). Skipping."
+            )
             return {"available": False, "reason": "Rate limit too low"}
-        
+
         repo = g.get_repo(f"{m.group(1)}/{m.group(2)}")
 
         return {
-            "available":       True,
-            "full_name":       repo.full_name,
-            "owner":           repo.owner.login,
-            "description":     repo.description,
-            "is_private":      repo.private,
-            "is_fork":         repo.fork,
-            "stars":           repo.stargazers_count,
-            "forks":           repo.forks_count,
-            "open_issues":     repo.open_issues_count,
-            "topics":          repo.get_topics(),
-            "default_branch":  repo.default_branch,
-            "created_at":      str(repo.created_at.date()) if repo.created_at else None,
-            "pushed_at":       str(repo.pushed_at.date()) if repo.pushed_at else None,
-            "size_kb":         repo.size,
-            "license":         (repo.license.spdx_id if repo.license else None),
-            "language":        repo.language,
-            "subscribers":     repo.subscribers_count,
-            "visibility":      "private" if repo.private else "public",
+            "available": True,
+            "full_name": repo.full_name,
+            "owner": repo.owner.login,
+            "description": repo.description,
+            "is_private": repo.private,
+            "is_fork": repo.fork,
+            "stars": repo.stargazers_count,
+            "forks": repo.forks_count,
+            "open_issues": repo.open_issues_count,
+            "topics": repo.get_topics(),
+            "default_branch": repo.default_branch,
+            "created_at": str(repo.created_at.date()) if repo.created_at else None,
+            "pushed_at": str(repo.pushed_at.date()) if repo.pushed_at else None,
+            "size_kb": repo.size,
+            "license": (repo.license.spdx_id if repo.license else None),
+            "language": repo.language,
+            "subscribers": repo.subscribers_count,
+            "visibility": "private" if repo.private else "public",
         }
     except Exception as exc:
         logger.debug(f"GitHub enrichment failed: {exc}")
@@ -3326,11 +4074,7 @@ def enrichViaGithubApi(
 
 
 def saveReport(
-    reportData: Dict[str, Any],
-    repoPath: str,
-    inputTarget: str,
-    outputRootDir: str,
-    isUrl: bool
+    reportData: Dict[str, Any], repoPath: str, inputTarget: str, outputRootDir: str, isUrl: bool
 ) -> str:
     """
     Save analysis report to JSON and generate two separate summary CSVs.
@@ -3384,16 +4128,21 @@ def saveReport(
 
     freq = 0
     if gt.get("git", {}).get("active_span_months", 0) > 0:
-        freq = round(gt.get("git", {}).get("commit_count", 0) / gt.get("git", {}).get("active_span_months"), 1)
+        freq = round(
+            gt.get("git", {}).get("commit_count", 0) / gt.get("git", {}).get("active_span_months"),
+            1,
+        )
 
     sec_count = tm.get("secrets", {}).get("findings_count", 0)
-    sec_status = "Clean" if tm.get("secrets", {}).get("clean", True) else f"Review Required ({sec_count})"
+    sec_status = (
+        "Clean" if tm.get("secrets", {}).get("clean", True) else f"Review Required ({sec_count})"
+    )
 
     # Note: Recalculated lang percent is not used directly since byte percent is output below
 
     byte_breakdown = reportData.get("heuristics", {}).get("byte_breakdown", {})
-    consolidatedLangs = defaultdict(int)
-    consolidatedFws = defaultdict(int)
+    consolidatedLangs = defaultdict(int)  # type: ignore
+    consolidatedFws = defaultdict(int)  # type: ignore
 
     for label, byte_count in byte_breakdown.items():
         if label in NON_CORE_FORMATS:
@@ -3419,7 +4168,9 @@ def saveReport(
             if pct >= 5.0:
                 lang_pcts.append((name, pct))
         lang_pcts.sort(key=lambda x: x[1], reverse=True)
-        langBytePctStr = " | ".join([f"{name} ({pct:.1f}%)" for name, pct in lang_pcts]) or "None > 5%"
+        langBytePctStr = (
+            " | ".join([f"{name} ({pct:.1f}%)" for name, pct in lang_pcts]) or "None > 5%"
+        )
 
     # Process Framework %
     totalFwBytes = sum(consolidatedFws.values())
@@ -3435,138 +4186,196 @@ def saveReport(
     else:
         fwBytePctStr = "None Detected"
 
-    prs_data = reportData.get("github_prs", {
-        "total_pr_count": 0,
-        "open_pr_count": 0,
-        "closed_pr_count": 0,
-        "merged_pr_count": 0,
-        "github_pr_analysis_available": False,
-    })
+    prs_data = reportData.get(
+        "github_prs",
+        {
+            "total_pr_count": 0,
+            "open_pr_count": 0,
+            "closed_pr_count": 0,
+            "merged_pr_count": 0,
+            "github_pr_analysis_available": False,
+        },
+    )
 
     all_headers = [
-        "repo_name", "is_git", "license_type",
-        "first_commit_date", "last_commit_date",
-        "loc_code", "loc_comment", "loc_blank", "loc_files",
-        "lang_count", "languages", "languages_frontend", "languages_backend",
-        "commits", "contributors", "all_contributors_count",
-        "all_contributors", "branch_count", "meaningful_commit_count",
-        "development_span_months", "commits_per_month", "git_history_intact",
-        "tokens_llm", "lexical_token", "duplication_weighted_percent",
-        "code_complexity", "ai_detection_percent", "frameworks",
-        "framework_frontend", "framework_backend",
-        "databases_used", "third_party_apis", "setup_guidelines",
-        "security_findings", "documentation_quality",
-        "repo_rating_score", "repo_rating_label",
-        "languages_percentage_bytes(>5%)", "frameworks_percentage_bytes(>5%)",
+        "repo_name",
+        "is_git",
+        "license_type",
+        "first_commit_date",
+        "last_commit_date",
+        "loc_code",
+        "loc_comment",
+        "loc_blank",
+        "loc_files",
+        "lang_count",
+        "languages",
+        "languages_frontend",
+        "languages_backend",
+        "commits",
+        "contributors",
+        "all_contributors_count",
+        "all_contributors",
+        "branch_count",
+        "meaningful_commit_count",
+        "development_span_months",
+        "commits_per_month",
+        "git_history_intact",
+        "tokens_llm",
+        "lexical_token",
+        "duplication_weighted_percent",
+        "code_complexity",
+        "ai_detection_percent",
+        "frameworks",
+        "framework_frontend",
+        "framework_backend",
+        "databases_used",
+        "third_party_apis",
+        "setup_guidelines",
+        "security_findings",
+        "documentation_quality",
+        "repo_rating_score",
+        "repo_rating_label",
+        "languages_percentage_bytes(>5%)",
+        "frameworks_percentage_bytes(>5%)",
         "total_time_seconds",
-        "total_pr_count", "open_pr_count", "closed_pr_count",
-        "merged_pr_count", "github_pr_analysis_available"
+        "total_pr_count",
+        "open_pr_count",
+        "closed_pr_count",
+        "merged_pr_count",
+        "github_pr_analysis_available",
     ]
 
     all_row = {
-        "repo_name":          reportData.get("repo"),
-        "is_git":             reportData.get("is_git"),
-        "license_type":       tm.get("compliance", {}).get("license_type", "N/A"),
-        "first_commit_date":  gt.get("git", {}).get("first_commit", "N/A"),
-        "last_commit_date":   gt.get("git", {}).get("last_update", "N/A"),
-        "loc_code":           gt.get("loc", {}).get("breakdown", {}).get("code", 0),
-        "loc_comment":        gt.get("loc", {}).get("breakdown", {}).get("comment", 0),
-        "loc_blank":          gt.get("loc", {}).get("breakdown", {}).get("blank", 0),
-        "loc_files":          gt.get("loc", {}).get("breakdown", {}).get("nFiles", 0),
-        "lang_count":         len(primaryLangs),
-        "languages":          " | ".join(primaryLangs),
+        "repo_name": reportData.get("repo"),
+        "is_git": reportData.get("is_git"),
+        "license_type": tm.get("compliance", {}).get("license_type", "N/A"),
+        "first_commit_date": gt.get("git", {}).get("first_commit", "N/A"),
+        "last_commit_date": gt.get("git", {}).get("last_update", "N/A"),
+        "loc_code": gt.get("loc", {}).get("breakdown", {}).get("code", 0),
+        "loc_comment": gt.get("loc", {}).get("breakdown", {}).get("comment", 0),
+        "loc_blank": gt.get("loc", {}).get("breakdown", {}).get("blank", 0),
+        "loc_files": gt.get("loc", {}).get("breakdown", {}).get("nFiles", 0),
+        "lang_count": len(primaryLangs),
+        "languages": " | ".join(primaryLangs),
         "languages_frontend": " | ".join(frontendLangs),
-        "languages_backend":  " | ".join(backendLangs),
-        "commits":            gt.get("git", {}).get("commit_count", 0),
-        "contributors":       gt.get("git", {}).get("unique_contributors", 0),
+        "languages_backend": " | ".join(backendLangs),
+        "commits": gt.get("git", {}).get("commit_count", 0),
+        "contributors": gt.get("git", {}).get("unique_contributors", 0),
         "all_contributors_count": gt.get("git", {}).get("all_contributors_count", 0),
-        "all_contributors":   ", ".join([c.get("name", "") for c in gt.get("git", {}).get("all_contributors", [])]),
-        "branch_count":       gt.get("git", {}).get("branch_count", 0),
+        "all_contributors": ", ".join(
+            [c.get("name", "") for c in gt.get("git", {}).get("all_contributors", [])]
+        ),
+        "branch_count": gt.get("git", {}).get("branch_count", 0),
         "meaningful_commit_count": gt.get("git", {}).get("meaningful_commit_count", 0),
         "development_span_months": gt.get("git", {}).get("active_span_months", 0),
-        "commits_per_month":  f"{freq} commits/mo",
-        "git_history_intact": gt.get("git", {}).get("history_integrity", {}).get("appears_intact", False),
-        "tokens_llm":         tm.get("tokens", {}).get("llm", 0),
-        "lexical_token":      lexTokCount,
-        "duplication_weighted_percent":   f"{tm.get('duplication', {}).get('token_weighted', 0)*100:.1f}%",
-        "code_complexity":    he.get("complexity", "Low"),
-        "ai_detection_percent": f"{he.get('ai_detection', {}).get('repo_score', 0)*100:.1f}%",
-        "frameworks":         " | ".join([f"{k}: {','.join(v)}" for k, v in he.get("frameworks", {}).items()]),
+        "commits_per_month": f"{freq} commits/mo",
+        "git_history_intact": gt.get("git", {})
+        .get("history_integrity", {})
+        .get("appears_intact", False),
+        "tokens_llm": tm.get("tokens", {}).get("llm", 0),
+        "lexical_token": lexTokCount,
+        "duplication_weighted_percent": f"{tm.get('duplication', {}).get('token_weighted', 0) * 100:.1f}%",
+        "code_complexity": he.get("complexity", "Low"),
+        "ai_detection_percent": f"{he.get('ai_detection', {}).get('repo_score', 0) * 100:.1f}%",
+        "frameworks": " | ".join(
+            [f"{k}: {','.join(v)}" for k, v in he.get("frameworks", {}).items()]
+        ),
         "framework_frontend": " | ".join(frontendFws),
-        "framework_backend":  " | ".join(backendFws),
-        "databases_used":     " | ".join(infra.get("databases", [])),
-        "third_party_apis":   " | ".join(infra.get("apis", [])),
-        "setup_guidelines":   "Present" if doc.get("has_setup") else "Not found in README",
-        "security_findings":  sec_status,
+        "framework_backend": " | ".join(backendFws),
+        "databases_used": " | ".join(infra.get("databases", [])),
+        "third_party_apis": " | ".join(infra.get("apis", [])),
+        "setup_guidelines": "Present" if doc.get("has_setup") else "Not found in README",
+        "security_findings": sec_status,
         "documentation_quality": doc.get("doc_quality", "Low"),
-        "repo_rating_score":  he.get("repo_rating", {}).get("rating", 0),
-        "repo_rating_label":  he.get("repo_rating", {}).get("label", "N/A"),
+        "repo_rating_score": he.get("repo_rating", {}).get("rating", 0),
+        "repo_rating_label": he.get("repo_rating", {}).get("label", "N/A"),
         "languages_percentage_bytes(>5%)": langBytePctStr,
         "frameworks_percentage_bytes(>5%)": fwBytePctStr,
         "total_time_seconds": reportData.get("performance", {}).get("total_seconds", 0),
-        "total_pr_count":     prs_data.get("total_pr_count", 0),
-        "open_pr_count":      prs_data.get("open_pr_count", 0),
-        "closed_pr_count":     prs_data.get("closed_pr_count", 0),
-        "merged_pr_count":     prs_data.get("merged_pr_count", 0),
+        "total_pr_count": prs_data.get("total_pr_count", 0),
+        "open_pr_count": prs_data.get("open_pr_count", 0),
+        "closed_pr_count": prs_data.get("closed_pr_count", 0),
+        "merged_pr_count": prs_data.get("merged_pr_count", 0),
         "github_pr_analysis_available": prs_data.get("github_pr_analysis_available", False),
     }
 
     meta_headers = [
-        "repo_name", "lexical_token", "framework_frontend", "framework_backend",
-        "languages_frontend", "languages_backend",
-        "language_framework_details", "domain_industry",
-        "commercial_usage_summary", "security_scrubbing_confirmation",
-        "full_git_history", "repo_rating_score", "first_commit_date", "last_commit_date",
-        "languages_percentage_bytes(>5%)", "frameworks_percentage_bytes(>5%)",
-        "development_span_months", "commits_per_month", "unique_contributors",
-        "all_contributors_count", "all_contributors",
-        "total_pr_count", "open_pr_count", "closed_pr_count", "merged_pr_count", "github_pr_analysis_available"
+        "repo_name",
+        "lexical_token",
+        "framework_frontend",
+        "framework_backend",
+        "languages_frontend",
+        "languages_backend",
+        "language_framework_details",
+        "domain_industry",
+        "commercial_usage_summary",
+        "security_scrubbing_confirmation",
+        "full_git_history",
+        "repo_rating_score",
+        "first_commit_date",
+        "last_commit_date",
+        "languages_percentage_bytes(>5%)",
+        "frameworks_percentage_bytes(>5%)",
+        "development_span_months",
+        "commits_per_month",
+        "unique_contributors",
+        "all_contributors_count",
+        "all_contributors",
+        "total_pr_count",
+        "open_pr_count",
+        "closed_pr_count",
+        "merged_pr_count",
+        "github_pr_analysis_available",
     ]
 
     license_type_str = tm.get("compliance", {}).get("license_type", "Unknown") or "Unknown"
-    is_permissive = any(word in license_type_str.lower() for word in ["mit", "apache", "bsd", "isc"])
+    is_permissive = any(
+        word in license_type_str.lower() for word in ["mit", "apache", "bsd", "isc"]
+    )
     commercial_summary = "Permissive" if is_permissive else "Restrictive"
 
     meta_row = {
-        "repo_name":                  reportData.get("repo"),
-        "lexical_token":              lexTokCount,
-        "framework_frontend":         "|".join(frontendFws),
-        "framework_backend":          "|".join(backendFws),
-        "languages_frontend":         "|".join(frontendLangs),
-        "languages_backend":          "|".join(backendLangs),
-        "language_framework_details": "|".join([f"{k}:{','.join(v)}" for k, v in he.get("frameworks", {}).items()]),
-        "domain_industry":            "Unknown",
-        "commercial_usage_summary":   commercial_summary,
+        "repo_name": reportData.get("repo"),
+        "lexical_token": lexTokCount,
+        "framework_frontend": "|".join(frontendFws),
+        "framework_backend": "|".join(backendFws),
+        "languages_frontend": "|".join(frontendLangs),
+        "languages_backend": "|".join(backendLangs),
+        "language_framework_details": "|".join(
+            [f"{k}:{','.join(v)}" for k, v in he.get("frameworks", {}).items()]
+        ),
+        "domain_industry": "Unknown",
+        "commercial_usage_summary": commercial_summary,
         "security_scrubbing_confirmation": sec_status,
-        "full_git_history":           all_row["git_history_intact"],
-        "repo_rating_score":          all_row["repo_rating_score"],
-        "first_commit_date":          all_row["first_commit_date"],
-        "last_commit_date":           all_row["last_commit_date"],
+        "full_git_history": all_row["git_history_intact"],
+        "repo_rating_score": all_row["repo_rating_score"],
+        "first_commit_date": all_row["first_commit_date"],
+        "last_commit_date": all_row["last_commit_date"],
         "languages_percentage_bytes(>5%)": all_row["languages_percentage_bytes(>5%)"],
         "frameworks_percentage_bytes(>5%)": all_row["frameworks_percentage_bytes(>5%)"],
-        "development_span_months":    all_row["development_span_months"],
-        "commits_per_month":          all_row["commits_per_month"],
-        "unique_contributors":        all_row["contributors"],
-        "all_contributors_count":     all_row["all_contributors_count"],
-        "all_contributors":           all_row["all_contributors"],
-        "total_pr_count":             prs_data.get("total_pr_count", 0),
-        "open_pr_count":              prs_data.get("open_pr_count", 0),
-        "closed_pr_count":             prs_data.get("closed_pr_count", 0),
-        "merged_pr_count":             prs_data.get("merged_pr_count", 0),
+        "development_span_months": all_row["development_span_months"],
+        "commits_per_month": all_row["commits_per_month"],
+        "unique_contributors": all_row["contributors"],
+        "all_contributors_count": all_row["all_contributors_count"],
+        "all_contributors": all_row["all_contributors"],
+        "total_pr_count": prs_data.get("total_pr_count", 0),
+        "open_pr_count": prs_data.get("open_pr_count", 0),
+        "closed_pr_count": prs_data.get("closed_pr_count", 0),
+        "merged_pr_count": prs_data.get("merged_pr_count", 0),
         "github_pr_analysis_available": prs_data.get("github_pr_analysis_available", False),
     }
 
     reportData["full_report_snapshot"] = {
         **all_row,  # Include everything currently in all_row
-        "deployment_env":     "|".join(infra.get("deployment", [])),
+        "deployment_env": "|".join(infra.get("deployment", [])),
         "environment_variables": doc.get("env_vars", "N/A"),
-        "stars":              gh.get("stars", "N/A"),
-        "forks":              gh.get("forks", "N/A"),
-        "watchers":           gh.get("subscribers", "N/A"),
-        "open_issues":        gh.get("open_issues", "N/A"),
-        "creation_date":      gh.get("created_at", "N/A"),
-        "loc_verified":       gt.get("loc", {}).get("value", 0),
-        "tokenizer_method":   tm.get("tokens", {}).get("tokenizer", "N/A"),
+        "stars": gh.get("stars", "N/A"),
+        "forks": gh.get("forks", "N/A"),
+        "watchers": gh.get("subscribers", "N/A"),
+        "open_issues": gh.get("open_issues", "N/A"),
+        "creation_date": gh.get("created_at", "N/A"),
+        "loc_verified": gt.get("loc", {}).get("value", 0),
+        "tokenizer_method": tm.get("tokens", {}).get("tokenizer", "N/A"),
     }
 
     with open(outFile, "w", encoding="utf-8") as f:
@@ -3630,7 +4439,7 @@ def saveReport(
         "Setup Guidelines",
         "Security Findings",
         "Documentation Quality",
-        "Repository Rating Score"
+        "Repository Rating Score",
     ]
 
     legacy_row = {
@@ -3676,7 +4485,7 @@ def saveReport(
         "Setup Guidelines": all_row.get("setup_guidelines", ""),
         "Security Findings": all_row.get("security_findings", ""),
         "Documentation Quality": all_row.get("documentation_quality", ""),
-        "Repository Rating Score": all_row.get("repo_rating_score", "")
+        "Repository Rating Score": all_row.get("repo_rating_score", ""),
     }
 
     appendToCsv("legacy.csv", legacy_headers, legacy_row)
@@ -3700,7 +4509,9 @@ def runAnalysis(args: argparse.Namespace) -> bool:
         gitlabToken = os.getenv("GITLAB_TOKEN") or os.getenv("GL_TOKEN")
     azureToken = getattr(args, "azure_token", None)
     if not azureToken:
-        azureToken = os.getenv("AZURE_DEVOPS_TOKEN") or os.getenv("AZURE_TOKEN") or os.getenv("AZ_TOKEN")
+        azureToken = (
+            os.getenv("AZURE_DEVOPS_TOKEN") or os.getenv("AZURE_TOKEN") or os.getenv("AZ_TOKEN")
+        )
     startTime = time.time()
 
     isUrl = (
@@ -3712,7 +4523,9 @@ def runAnalysis(args: argparse.Namespace) -> bool:
 
     try:
         if isUrl:
-            cloneBase = args.clone_dir if args.clone_dir else os.path.join(os.getcwd(), "cloned_repos")
+            cloneBase = (
+                args.clone_dir if args.clone_dir else os.path.join(os.getcwd(), "cloned_repos")
+            )
             os.makedirs(cloneBase, exist_ok=True)
 
             repoName = os.path.basename(inputTarget.rstrip("/").replace(".git", ""))
@@ -3760,9 +4573,9 @@ def runAnalysis(args: argparse.Namespace) -> bool:
             "ground_truth": {},
             "tool_metrics": {},
             "heuristics": {},
-            "performance": {}
+            "performance": {},
         }
-        fileList = []
+        fileList = []  # type: ignore
 
         print("[Stage 0] Extracting git metadata...")
         s0Start = time.time()
@@ -3778,7 +4591,7 @@ def runAnalysis(args: argparse.Namespace) -> bool:
             "history_integrity": gitData.get("history_integrity", {}),
             "all_contributors": gitData.get("all_contributors", []),
             "all_contributors_count": len(gitData.get("all_contributors", [])),
-            "source": "git"
+            "source": "git",
         }
         report["performance"]["stage0_seconds"] = round(time.time() - s0Start, 2)
 
@@ -3794,7 +4607,9 @@ def runAnalysis(args: argparse.Namespace) -> bool:
         if azure_info:
             print("[Stage 0.5] Running Azure DevOps PR analytics...")
             s05Start = time.time()
-            prMetrics = runAzureDevOpsPrAnalysis(targetDir, inputTarget, azureToken or githubToken, prOutDir)
+            prMetrics = runAzureDevOpsPrAnalysis(
+                targetDir, inputTarget, azureToken or githubToken, prOutDir
+            )
             report["github_prs"] = prMetrics
             report["performance"]["stage0_5_seconds"] = round(time.time() - s05Start, 2)
         elif gitlab_info:
@@ -3824,9 +4639,9 @@ def runAnalysis(args: argparse.Namespace) -> bool:
                     "code": clocData["SUM"]["code"],
                     "comment": clocData["SUM"]["comment"],
                     "blank": clocData["SUM"]["blank"],
-                    "nFiles": clocData["SUM"]["nFiles"]
+                    "nFiles": clocData["SUM"]["nFiles"],
                 },
-                "source": "cloc"
+                "source": "cloc",
             }
 
             langBreakdown = {}
@@ -3837,7 +4652,7 @@ def runAnalysis(args: argparse.Namespace) -> bool:
                 langBreakdown[lang] = {
                     "loc": stats["code"],
                     "files": stats["nFiles"],
-                    "pct": round((stats["code"] / sum_code * 100), 2) if sum_code > 0 else 0
+                    "pct": round((stats["code"] / sum_code * 100), 2) if sum_code > 0 else 0,
                 }
 
             coreLangs = [lang for lang in langBreakdown.keys() if lang not in NON_CORE_FORMATS]
@@ -3848,18 +4663,19 @@ def runAnalysis(args: argparse.Namespace) -> bool:
                 "core_list": coreLangs,
                 "list": list(langBreakdown.keys()),
                 "breakdown": langBreakdown,
-                "source": "cloc"
+                "source": "cloc",
             }
         else:
-            logger.warning("[Layer 1] Cloc failed or returned empty. Falling back to heuristic scan.")
+            logger.warning(
+                "[Layer 1] Cloc failed or returned empty. Falling back to heuristic scan."
+            )
             report["ground_truth"]["loc"] = {"value": 0, "source": "none", "notes": "cloc failure"}
             report["ground_truth"]["languages"] = {
                 "count": 0,
                 "list": [],
                 "breakdown": {},
-                "source": "none"
+                "source": "none",
             }
-
 
         loc_val = report["ground_truth"].get("loc", {}).get("value", 0)
 
@@ -3870,7 +4686,9 @@ def runAnalysis(args: argparse.Namespace) -> bool:
             stage2Result, fileStats, fileTokensMap, framework_findings = runStage2Analysis(fileList)
             report["tool_metrics"]["tokens"] = {
                 "llm": stage2Result.get("metrics", {}).get("llm_tokens", {}).get("total", 0),
-                "lexical": stage2Result.get("metrics", {}).get("lexical_tokens", {}).get("total", 0)
+                "lexical": stage2Result.get("metrics", {})
+                .get("lexical_tokens", {})
+                .get("total", 0),
             }
             report["tool_metrics"]["duplication"] = stage2Result.get("duplication_metrics", {})
             report["performance"]["stage2_seconds"] = round(time.time() - s2Start, 2)
@@ -3908,12 +4726,10 @@ def runAnalysis(args: argparse.Namespace) -> bool:
             report["heuristics"]["docs"] = analyzeDocumentation(targetDir)
             report["heuristics"]["testing"] = {
                 "coverage": detectCoverage(targetDir),
-                "case_count": estimateTestCases(fileList)
+                "case_count": estimateTestCases(fileList),
             }
             report["heuristics"]["complexity"] = computeComplexityScore(
-                loc_val,
-                report["tool_metrics"]["tokens"]["llm"],
-                len(fileList)
+                loc_val, report["tool_metrics"]["tokens"]["llm"], len(fileList)
             )
             report["tool_metrics"]["code_age"] = analyzeCodeAge(targetDir, fileList)
             ratingData = computeRepoRating(
@@ -3970,9 +4786,19 @@ def runAnalysis(args: argparse.Namespace) -> bool:
         print(f"    - Commits      : {gt.get('git', {}).get('commit_count', 0):,}")
         print(f"    - Contributors : {gt.get('git', {}).get('unique_contributors', 0)}")
         print(f"    - LLM Tokens   : {tm.get('tokens', {}).get('llm', 0):,}")
-        print(f"    - Rating Score : {he.get('repo_rating', {}).get('rating', 0.0):.2f} / 10.0 ({he.get('repo_rating', {}).get('label', 'N/A')})")
+        print(
+            f"    - Rating Score : {he.get('repo_rating', {}).get('rating', 0.0):.2f} / 10.0 ({he.get('repo_rating', {}).get('label', 'N/A')})"
+        )
         print(f"    - Total Time   : {report.get('performance', {}).get('total_seconds', 0)}s")
         print("=" * 60 + "\n")
+
+        if isUrl and os.path.exists(targetDir):
+            try:
+                import shutil
+                shutil.rmtree(targetDir, ignore_errors=True)
+                logger.info(f"[runAnalysis] Cleaned up cloned repository: {targetDir}")
+            except Exception as e:
+                logger.warning(f"[runAnalysis] Failed to cleanup {targetDir}: {e}")
 
         return True
 
@@ -4065,7 +4891,7 @@ def runInteractiveMode() -> Optional[argparse.Namespace]:
             max_files=maxFiles,
             github_token=ghToken,
             gitlab_token=glToken,
-            azure_token=azToken
+            azure_token=azToken,
         )
 
 
@@ -4074,7 +4900,7 @@ def main():
     dotenv_path = os.path.join(os.getcwd(), ".env")
     if os.path.exists(dotenv_path):
         try:
-            with open(dotenv_path, "r", encoding="utf-8") as f:
+            with open(dotenv_path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line or line.startswith("#"):
@@ -4083,7 +4909,9 @@ def main():
                         key, val = line.split("=", 1)
                         key = key.strip()
                         val = val.strip()
-                        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                        if (val.startswith('"') and val.endswith('"')) or (
+                            val.startswith("'") and val.endswith("'")
+                        ):
                             val = val[1:-1]
                         if key and key not in os.environ:
                             os.environ[key] = val
@@ -4111,23 +4939,55 @@ Examples:
     python Repo_analysis_tool.py -i ./my-app --mode stage1
         """,
     )
-    parser.add_argument("--input",  "-i", type=str, help="Local folder path OR Git repository URL")
-    parser.add_argument("--output-dir", "-o", type=str, default="./outputs",
-                        help="Output directory for reports (default: ./outputs)")
-    parser.add_argument("--clone-dir", "-c", type=str, default=None,
-                        help="Base directory for cloned repositories (default: ./cloned_repos)")
-    parser.add_argument("--mode", "-m", choices=["stage1", "stage2", "full"], default="full",
-                        help="Pipeline mode: stage1=structure, stage2=deep, full=all (default: full)")
-    parser.add_argument("--max-files", type=int, default=None,
-                        help="Soft cap on number of files processed")
-    parser.add_argument("--github-token", type=str, default=None,
-                        help="GitHub Personal Access Token for API enrichment (needed for private repos)")
-    parser.add_argument("--gitlab-token", type=str, default=None,
-                        help="GitLab Personal Access Token for API enrichment (needed for private repos)")
-    parser.add_argument("--azure-token", type=str, default=None,
-                        help="Azure DevOps Personal Access Token for API enrichment and cloning (needed for private repos)")
-    parser.add_argument("--batch", type=str, default=None,
-                        help="Path to a text file containing one repo URL or local path per line")
+    parser.add_argument("--input", "-i", type=str, help="Local folder path OR Git repository URL")
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        type=str,
+        default="./outputs",
+        help="Output directory for reports (default: ./outputs)",
+    )
+    parser.add_argument(
+        "--clone-dir",
+        "-c",
+        type=str,
+        default=None,
+        help="Base directory for cloned repositories (default: ./cloned_repos)",
+    )
+    parser.add_argument(
+        "--mode",
+        "-m",
+        choices=["stage1", "stage2", "full"],
+        default="full",
+        help="Pipeline mode: stage1=structure, stage2=deep, full=all (default: full)",
+    )
+    parser.add_argument(
+        "--max-files", type=int, default=None, help="Soft cap on number of files processed"
+    )
+    parser.add_argument(
+        "--github-token",
+        type=str,
+        default=None,
+        help="GitHub Personal Access Token for API enrichment (needed for private repos)",
+    )
+    parser.add_argument(
+        "--gitlab-token",
+        type=str,
+        default=None,
+        help="GitLab Personal Access Token for API enrichment (needed for private repos)",
+    )
+    parser.add_argument(
+        "--azure-token",
+        type=str,
+        default=None,
+        help="Azure DevOps Personal Access Token for API enrichment and cloning (needed for private repos)",
+    )
+    parser.add_argument(
+        "--batch",
+        type=str,
+        default=None,
+        help="Path to a text file containing one repo URL or local path per line",
+    )
 
     if len(sys.argv) == 1:
         while True:
@@ -4153,8 +5013,12 @@ Examples:
             if not os.path.isfile(args.batch):
                 print(f"[!] Batch file not found: {args.batch}")
                 sys.exit(1)
-            with open(args.batch, "r", encoding="utf-8") as f:
-                targets = [line.strip().strip('"') for line in f if line.strip() and not line.startswith("#")]
+            with open(args.batch, encoding="utf-8") as f:
+                targets = [
+                    line.strip().strip('"')
+                    for line in f
+                    if line.strip() and not line.startswith("#")
+                ]
             print(f"[Batch] Processing {len(targets)} repositories...")
             success_count = 0
             for idx, target in enumerate(targets, 1):

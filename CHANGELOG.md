@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Open Source Guidelines**: Added `CODE_OF_CONDUCT.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and issue templates for bug reports and feature requests.
+- **Automated Cleanup**: `analyzer.py` now automatically deletes the cloned repository directory after analysis completes, preventing local disk space bloat during large batch operations.
+- **License Headers**: Automated MIT license header validation on all Python files.
 - **Cross-platform launchers** at the repo root — `run` (bash / Linux / macOS / WSL) and `run.bat` (Windows):
   - Auto-select the `venv/` interpreter with fallback to system `python`/`python3`
   - Prepend `src/` to `PYTHONPATH`, so it works without `pip install -e`

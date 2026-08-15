@@ -24,22 +24,31 @@ TUI Backend Helper for Repo Analysis Tool
 Handles GitHub & Azure DevOps API integration, web token URLs, repo formatting, and tag resolution for TUI dialogs.
 """
 
-import sys
-import json
-import urllib.request
-import urllib.parse
-import urllib.error
-import base64
-import webbrowser
-import os
 import argparse
+import base64
+import json
+import os
 import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+import webbrowser
+
 
 def sanitize_str(s):
     """Sanitizes strings to avoid shell expansion issues (backticks, $, backslashes, quotes)."""
     if not s:
         return ""
-    return s.replace('`', '').replace('$', '').replace('\\', '').replace('"', "'").replace('\n', ' ').replace('\r', '')
+    return (
+        s.replace("`", "")
+        .replace("$", "")
+        .replace("\\", "")
+        .replace('"', "'")
+        .replace("\n", " ")
+        .replace("\r", "")
+    )
+
 
 def get_github_web_token_url():
     """Returns direct web URL to create a GitHub PAT with required scopes pre-filled."""
@@ -47,17 +56,20 @@ def get_github_web_token_url():
     description = "Repo_Analysis_Tool_TUI"
     return f"https://github.com/settings/tokens/new?description={description}&scopes={scopes}"
 
+
 def get_azure_web_token_url(org_name):
     """Returns direct web URL to create Azure DevOps PAT."""
     return f"https://dev.azure.com/{org_name}/_usersSettings/tokens"
+
 
 def open_web_page(url):
     """Opens browser to specified URL."""
     try:
         webbrowser.open(url)
         return True
-    except Exception as e:
+    except Exception:
         return False
+
 
 def check_company_exists_github(target, token=None):
     """
@@ -66,10 +78,7 @@ def check_company_exists_github(target, token=None):
     if target.lower() in ["me", "self", "@me"] and token:
         return True, "Authenticated user ('me')"
 
-    headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "Repo-Analysis-TUI/3.0"
-    }
+    headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "Repo-Analysis-TUI/3.0"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
@@ -113,10 +122,7 @@ def check_company_exists_azure(org, token=None):
     Checks if an Azure DevOps organization exists before attempting to fetch repositories.
     """
     url = f"https://dev.azure.com/{org}/_apis/projects?api-version=7.0"
-    headers = {
-        "User-Agent": "Repo-Analysis-TUI/3.0",
-        "Accept": "application/json"
-    }
+    headers = {"User-Agent": "Repo-Analysis-TUI/3.0", "Accept": "application/json"}
     if token:
         auth_str = f":{token}"
         b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
@@ -126,8 +132,14 @@ def check_company_exists_azure(org, token=None):
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw_body = resp.read().decode("utf-8")
-            if raw_body.lstrip().startswith("<") or "html" in resp.headers.get("Content-Type", "").lower():
-                return True, f"Azure DevOps Organization '{org}' exists (Authentication token recommended)."
+            if (
+                raw_body.lstrip().startswith("<")
+                or "html" in resp.headers.get("Content-Type", "").lower()
+            ):
+                return (
+                    True,
+                    f"Azure DevOps Organization '{org}' exists (Authentication token recommended).",
+                )
             data = json.loads(raw_body)
             count = data.get("count", 0)
             return True, f"Azure DevOps Organization '{org}' exists ({count} projects found)."
@@ -157,36 +169,48 @@ def fetch_github_repos(target, token=None, max_repos=5000, visibility="all"):
     Allows fetching > 100 repositories (up to max_repos).
     visibility: "all", "public", "private"
     """
-    print(f"[DEBUG] fetch_github_repos: target={target}, visibility={visibility}, has_token={bool(token)}", file=sys.stderr)
+    print(
+        f"[DEBUG] fetch_github_repos: target={target}, visibility={visibility}, has_token={bool(token)}",
+        file=sys.stderr,
+    )
     exists, msg = check_company_exists_github(target, token)
     if not exists:
         sys.stderr.write(f"[!] Company/User Validation Failed: {msg}\n")
         return []
 
     repos = []
-    headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "Repo-Analysis-TUI/3.0"
-    }
+    headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "Repo-Analysis-TUI/3.0"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
     urls_to_try = []
     is_authenticated_user = target.lower() in ["me", "self", "@me"] and token
-    
+
     if is_authenticated_user:
         # Authenticated user can see their own private repos
-        urls_to_try.append(("user", f"https://api.github.com/user/repos?per_page=100&type={visibility}"))
+        urls_to_try.append(
+            ("user", f"https://api.github.com/user/repos?per_page=100&type={visibility}")
+        )
     else:
         # For orgs, try orgs endpoint first (supports type=private with proper token)
-        urls_to_try.append(("org", f"https://api.github.com/orgs/{target}/repos?per_page=100&type={visibility}"))
-        
+        urls_to_try.append(
+            ("org", f"https://api.github.com/orgs/{target}/repos?per_page=100&type={visibility}")
+        )
+
         # For users, only public repos are accessible via /users/{username}/repos
         # type=private is NOT supported for other users
         if visibility == "private":
-            print(f"[DEBUG] Target '{target}' is not authenticated user; /users/{{user}}/repos doesn't support type=private. Private repos only accessible for orgs with token or authenticated user.", file=sys.stderr)
+            print(
+                f"[DEBUG] Target '{target}' is not authenticated user; /users/{{user}}/repos doesn't support type=private. Private repos only accessible for orgs with token or authenticated user.",
+                file=sys.stderr,
+            )
         else:
-            urls_to_try.append(("user", f"https://api.github.com/users/{target}/repos?per_page=100&type={visibility}"))
+            urls_to_try.append(
+                (
+                    "user",
+                    f"https://api.github.com/users/{target}/repos?per_page=100&type={visibility}",
+                )
+            )
 
     print(f"[DEBUG] URLs to try: {urls_to_try}", file=sys.stderr)
 
@@ -212,17 +236,15 @@ def fetch_github_repos(target, token=None, max_repos=5000, visibility="all"):
                                 desc = desc[:37] + "..."
                             is_private = repo.get("private", False)
                             desc_str = f"[{'Private' if is_private else 'Public'}] {desc}"
-                            
+
                             if token and clone_url and clone_url.startswith("https://"):
-                                auth_clone_url = clone_url.replace("https://", f"https://x-access-token:{token}@")
+                                auth_clone_url = clone_url.replace(
+                                    "https://", f"https://x-access-token:{token}@"
+                                )
                             else:
                                 auth_clone_url = clone_url
-                                
-                            repos.append({
-                                "name": name,
-                                "url": auth_clone_url,
-                                "desc": desc_str
-                            })
+
+                            repos.append({"name": name, "url": auth_clone_url, "desc": desc_str})
                         if len(data) < 100:
                             break
                         page += 1
@@ -230,10 +252,14 @@ def fetch_github_repos(target, token=None, max_repos=5000, visibility="all"):
                         break
             except urllib.error.HTTPError as e:
                 if e.code == 404 and page == 1:
-                    sys.stderr.write(f"[fetch_github_repos] {endpoint_type} endpoint returned 404\n")
+                    sys.stderr.write(
+                        f"[fetch_github_repos] {endpoint_type} endpoint returned 404\n"
+                    )
                     break
                 elif e.code == 403:
-                    sys.stderr.write(f"[fetch_github_repos] {endpoint_type} endpoint returned 403 (rate limit or no access)\n")
+                    sys.stderr.write(
+                        f"[fetch_github_repos] {endpoint_type} endpoint returned 403 (rate limit or no access)\n"
+                    )
                     break
                 else:
                     sys.stderr.write(f"GitHub API HTTP error on page {page}: {e}\n")
@@ -243,7 +269,9 @@ def fetch_github_repos(target, token=None, max_repos=5000, visibility="all"):
                 break
 
         if page_success:
-            sys.stderr.write(f"[fetch_github_repos] Successfully fetched {len(repos)} repos from {endpoint_type} endpoint\n")
+            sys.stderr.write(
+                f"[fetch_github_repos] Successfully fetched {len(repos)} repos from {endpoint_type} endpoint\n"
+            )
             break
 
     # Filter by visibility client-side as a safety net
@@ -253,6 +281,7 @@ def fetch_github_repos(target, token=None, max_repos=5000, visibility="all"):
         repos = [r for r in repos if "[Private]" in r["desc"]]
 
     return repos
+
 
 def fetch_azure_repos(org, token=None, project=None, max_repos=5000, visibility="all"):
     """
@@ -269,10 +298,7 @@ def fetch_azure_repos(org, token=None, project=None, max_repos=5000, visibility=
     skip = 0
     top = 100
 
-    headers = {
-        "User-Agent": "Repo-Analysis-TUI/3.0",
-        "Accept": "application/json"
-    }
+    headers = {"User-Agent": "Repo-Analysis-TUI/3.0", "Accept": "application/json"}
     if token:
         auth_str = f":{token}"
         b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
@@ -296,25 +322,25 @@ def fetch_azure_repos(org, token=None, project=None, max_repos=5000, visibility=
                     proj_name = sanitize_str(item.get("project", {}).get("name", "Project"))
                     full_name = f"{proj_name}/{repo_name}"
                     remote_url = item.get("remoteUrl") or item.get("webUrl") or ""
-                    
+
                     # Check visibility - Azure DevOps repos have isPrivate field
                     is_private = item.get("isPrivate", False)
                     if visibility == "public" and is_private:
                         continue
                     if visibility == "private" and not is_private:
                         continue
-                    
-                    clean_url = re.sub(r'https://[^/@]+@', 'https://', remote_url) if remote_url else ""
+
+                    clean_url = (
+                        re.sub(r"https://[^/@]+@", "https://", remote_url) if remote_url else ""
+                    )
                     if token and clean_url and clean_url.startswith("https://"):
                         auth_remote_url = clean_url.replace("https://", f"https://{token}@")
                     else:
                         auth_remote_url = clean_url
-                        
-                    repos.append({
-                        "name": full_name,
-                        "url": auth_remote_url,
-                        "desc": f"Project: {proj_name}"
-                    })
+
+                    repos.append(
+                        {"name": full_name, "url": auth_remote_url, "desc": f"Project: {proj_name}"}
+                    )
                 if len(items) < top:
                     break
                 skip += len(items)
@@ -324,6 +350,7 @@ def fetch_azure_repos(org, token=None, project=None, max_repos=5000, visibility=
 
     return repos
 
+
 def summarize_high_rating_tui(output_dir="./outputs", fmt="dialog"):
     """
     Summarizes repositories from output_dir that match:
@@ -331,16 +358,18 @@ def summarize_high_rating_tui(output_dir="./outputs", fmt="dialog"):
       repo_rating.label != "poor" (case-insensitive)
     Outputs formatted summary for TUI / dialog / stdout.
     """
-    import glob
     import csv
+    import glob
 
     repos = []
     seen = set()
 
-    report_files = glob.glob(os.path.join(output_dir, "*", "*_report.json")) + glob.glob(os.path.join(output_dir, "*_report.json"))
+    report_files = glob.glob(os.path.join(output_dir, "*", "*_report.json")) + glob.glob(
+        os.path.join(output_dir, "*_report.json")
+    )
     for rf in report_files:
         try:
-            with open(rf, "r", encoding="utf-8") as f:
+            with open(rf, encoding="utf-8") as f:
                 data = json.load(f)
             r_name = data.get("repo", os.path.basename(os.path.dirname(rf)))
             rating_obj = data.get("heuristics", {}).get("repo_rating", {})
@@ -351,20 +380,28 @@ def summarize_high_rating_tui(output_dir="./outputs", fmt="dialog"):
                 git_info = data.get("ground_truth", {}).get("git", {})
                 loc_info = data.get("ground_truth", {}).get("loc", {}).get("breakdown", {})
                 langs_dict = data.get("ground_truth", {}).get("languages", {}).get("breakdown", {})
-                langs_str = ", ".join(list(langs_dict.keys())[:3]) if isinstance(langs_dict, dict) else "N/A"
+                langs_str = (
+                    ", ".join(list(langs_dict.keys())[:3])
+                    if isinstance(langs_dict, dict)
+                    else "N/A"
+                )
                 fws_dict = data.get("heuristics", {}).get("frameworks", {})
-                fws_str = ", ".join(list(fws_dict.keys())[:3]) if isinstance(fws_dict, dict) else "N/A"
+                fws_str = (
+                    ", ".join(list(fws_dict.keys())[:3]) if isinstance(fws_dict, dict) else "N/A"
+                )
 
-                repos.append({
-                    "name": r_name,
-                    "rating": rating,
-                    "label": label,
-                    "commits": git_info.get("commit_count", 0),
-                    "contributors": git_info.get("unique_contributors", 0),
-                    "loc": loc_info.get("code", 0),
-                    "languages": langs_str,
-                    "frameworks": fws_str
-                })
+                repos.append(
+                    {
+                        "name": r_name,
+                        "rating": rating,
+                        "label": label,
+                        "commits": git_info.get("commit_count", 0),
+                        "contributors": git_info.get("unique_contributors", 0),
+                        "loc": loc_info.get("code", 0),
+                        "languages": langs_str,
+                        "frameworks": fws_str,
+                    }
+                )
                 seen.add(r_name)
         except Exception:
             continue
@@ -372,7 +409,7 @@ def summarize_high_rating_tui(output_dir="./outputs", fmt="dialog"):
     csv_file = os.path.join(output_dir, "summary_all.csv")
     if os.path.isfile(csv_file):
         try:
-            with open(csv_file, "r", encoding="utf-8") as f:
+            with open(csv_file, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     r_name = row.get("repo_name", "")
@@ -381,16 +418,18 @@ def summarize_high_rating_tui(output_dir="./outputs", fmt="dialog"):
                             rating = float(row.get("repo_rating_score", 0.0))
                             label = str(row.get("repo_rating_label", "")).strip()
                             if rating > 5.0 and label.lower() != "poor":
-                                repos.append({
-                                    "name": r_name,
-                                    "rating": rating,
-                                    "label": label,
-                                    "commits": int(row.get("commits", 0)),
-                                    "contributors": int(row.get("contributors", 0)),
-                                    "loc": int(row.get("loc_code", 0)),
-                                    "languages": row.get("languages", "N/A"),
-                                    "frameworks": row.get("frameworks", "N/A")
-                                })
+                                repos.append(
+                                    {
+                                        "name": r_name,
+                                        "rating": rating,
+                                        "label": label,
+                                        "commits": int(row.get("commits", 0)),
+                                        "contributors": int(row.get("contributors", 0)),
+                                        "loc": int(row.get("loc_code", 0)),
+                                        "languages": row.get("languages", "N/A"),
+                                        "frameworks": row.get("frameworks", "N/A"),
+                                    }
+                                )
                                 seen.add(r_name)
                         except Exception:
                             continue
@@ -416,9 +455,15 @@ def summarize_high_rating_tui(output_dir="./outputs", fmt="dialog"):
         for idx, r in enumerate(repos, 1):
             lines.append(f" [{idx}] Repository : {r['name']}")
             lines.append(f"     Rating Score : {r['rating']:.2f} / 10.0  (Label: {r['label']})")
-            lines.append(f"     Metrics      : LOC: {r['loc']:,} | Commits: {r['commits']:,} | Contributors: {r['contributors']}")
-            lines.append(f"     Tech Stack   : Languages: {r['languages']} | Frameworks: {r['frameworks']}")
-            lines.append("--------------------------------------------------------------------------")
+            lines.append(
+                f"     Metrics      : LOC: {r['loc']:,} | Commits: {r['commits']:,} | Contributors: {r['contributors']}"
+            )
+            lines.append(
+                f"     Tech Stack   : Languages: {r['languages']} | Frameworks: {r['frameworks']}"
+            )
+            lines.append(
+                "--------------------------------------------------------------------------"
+            )
 
     out_text = "\n".join(lines)
     print(out_text)
@@ -440,18 +485,24 @@ def main():
     # Command: fetch-repos
     fetch_parser = subparsers.add_parser("fetch-repos")
     fetch_parser.add_argument("--provider", choices=["github", "azure"], required=True)
-    fetch_parser.add_argument("--target", required=True, help="Username/Org name for GitHub or Org name for Azure")
+    fetch_parser.add_argument(
+        "--target", required=True, help="Username/Org name for GitHub or Org name for Azure"
+    )
     fetch_parser.add_argument("--token", default=None)
     fetch_parser.add_argument("--project", default=None)
     fetch_parser.add_argument("--visibility", choices=["all", "public", "private"], default="all")
-    fetch_parser.add_argument("--format", choices=["dialog", "json", "urls", "null"], default="dialog")
+    fetch_parser.add_argument(
+        "--format", choices=["dialog", "json", "urls", "null"], default="dialog"
+    )
 
     # Command: get-dialog-args
     subparsers.add_parser("get-dialog-args")
 
     # Command: resolve-selected
     resolve_parser = subparsers.add_parser("resolve-selected")
-    resolve_parser.add_argument("--tags", required=True, help="Space or quote separated list of tags (e.g., 'R1 R2 R3')")
+    resolve_parser.add_argument(
+        "--tags", required=True, help="Space or quote separated list of tags (e.g., 'R1 R2 R3')"
+    )
     resolve_parser.add_argument("--out", default="batch_repos.txt", help="Output batch file path")
 
     # Command: check-company
@@ -462,7 +513,11 @@ def main():
 
     # Command: summarize-rating
     sum_parser = subparsers.add_parser("summarize-rating")
-    sum_parser.add_argument("--output-dir", default="./outputs", help="Output directory containing JSON reports or summary_all.csv")
+    sum_parser.add_argument(
+        "--output-dir",
+        default="./outputs",
+        help="Output directory containing JSON reports or summary_all.csv",
+    )
     sum_parser.add_argument("--format", choices=["dialog", "json", "text"], default="dialog")
 
     args = parser.parse_args()
@@ -490,7 +545,9 @@ def main():
         if args.provider == "github":
             repos = fetch_github_repos(args.target, args.token, visibility=args.visibility)
         else:
-            repos = fetch_azure_repos(args.target, args.token, args.project, visibility=args.visibility)
+            repos = fetch_azure_repos(
+                args.target, args.token, args.project, visibility=args.visibility
+            )
 
         mapping_file = ".tui_repo_map.json"
         mapping = {"R0": {"name": "SELECT ALL", "url": "ALL", "desc": "ALL"}}
@@ -508,8 +565,8 @@ def main():
             items.append('"R0" "=== [SELECT ALL REPOSITORIES] ===" "ON"')
             for idx, r in enumerate(repos, 1):
                 tag = f"R{idx}"
-                name = r['name']
-                desc = r['desc']
+                name = r["name"]
+                desc = r["desc"]
                 items.append(f'"{tag}" "{name} ({desc})" "ON"')
             print("\n".join(items))
 
@@ -517,9 +574,9 @@ def main():
         mapping_file = ".tui_repo_map.json"
         if not os.path.exists(mapping_file):
             sys.exit(1)
-        with open(mapping_file, "r", encoding="utf-8") as f:
+        with open(mapping_file, encoding="utf-8") as f:
             mapping = json.load(f)
-        
+
         for tag, item in mapping.items():
             if tag == "R0":
                 label = "=== [SELECT ALL REPOSITORIES] ==="
@@ -534,12 +591,12 @@ def main():
             print("ERROR: Mapping file not found")
             sys.exit(1)
 
-        with open(mapping_file, "r", encoding="utf-8") as f:
+        with open(mapping_file, encoding="utf-8") as f:
             mapping = json.load(f)
 
-        raw_tags = args.tags.replace('"', ' ').replace("'", ' ').split()
+        raw_tags = args.tags.replace('"', " ").replace("'", " ").split()
         selected_urls = []
-        
+
         if "R0" in raw_tags:
             for tag, item in mapping.items():
                 if tag != "R0":
@@ -558,6 +615,7 @@ def main():
 
     elif args.command == "summarize-rating":
         summarize_high_rating_tui(output_dir=args.output_dir, fmt=args.format)
+
 
 if __name__ == "__main__":
     main()

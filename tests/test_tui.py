@@ -21,16 +21,15 @@
 
 """Tests for the TUI module."""
 
-import pytest
+import sys
 from pathlib import Path
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from repo_analysis.tui import (
     ConfirmModal,
-    MessageModal,
     InputModal,
+    MessageModal,
     ProgressModal,
 )
 
@@ -97,9 +96,9 @@ class TestRepoSelectionScreen:
                 await pilot.pause()
                 table = pilot.app.screen.query_one("#repo-table", DataTable)
                 await pilot.press("space")
-                assert table.get_row("R1")[3] == "☑️"
+                assert table.get_row("R1")[3] == "[X]"
                 await pilot.press("space")
-                assert table.get_row("R1")[3] == "☐"
+                assert table.get_row("R1")[3] == "[ ]"
 
         asyncio.run(scenario())
 
@@ -117,7 +116,7 @@ class TestRepoSelectionScreen:
                 await pilot.pause()
                 table = pilot.app.screen.query_one("#repo-table", DataTable)
                 await pilot.press("a")
-                assert table.get_row("R0")[3] == "☑️"
-                assert table.get_row("R1")[3] == "☑️"
+                assert table.get_row("R0")[3] == "[X]"
+                assert table.get_row("R1")[3] == "[X]"
 
         asyncio.run(scenario())

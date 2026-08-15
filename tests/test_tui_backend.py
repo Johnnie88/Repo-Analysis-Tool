@@ -21,22 +21,21 @@
 
 """Tests for the tui_backend module."""
 
-import pytest
-import json
-import tempfile
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-
 import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from repo_analysis.tui_backend import (
-    sanitize_str,
-    get_github_web_token_url,
-    get_azure_web_token_url,
-    check_company_exists_github,
-    check_company_exists_azure,
     check_company,
+    check_company_exists_azure,
+    check_company_exists_github,
+    get_azure_web_token_url,
+    get_github_web_token_url,
+    sanitize_str,
 )
 
 
@@ -75,13 +74,14 @@ class TestTUIBackend:
             mock_response.__enter__.return_value = mock_response
             mock_response.read.return_value = b'{"message": "Not Found"}'
             mock_response.getcode.return_value = 404
-            
+
             import urllib.error
+
             mock_response.__exit__.return_value = False
             mock_urlopen.side_effect = urllib.error.HTTPError(
                 "https://api.github.com/orgs/nonexistent", 404, "Not Found", {}, None
             )
-            
+
             exists, msg = check_company_exists_github("nonexistent")
             assert not exists
             assert "does not exist" in msg
@@ -91,10 +91,11 @@ class TestTUIBackend:
         """Test Azure DevOps company check - not found."""
         with patch("urllib.request.urlopen") as mock_urlopen:
             import urllib.error
+
             mock_urlopen.side_effect = urllib.error.HTTPError(
                 "https://dev.azure.com/nonexistent/_apis/projects", 404, "Not Found", {}, None
             )
-            
+
             exists, msg = check_company_exists_azure("nonexistent")
             assert not exists
             assert "does not exist" in msg

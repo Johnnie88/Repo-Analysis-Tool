@@ -41,15 +41,15 @@ def sample_repo(tmp_path):
     """Create a sample repository structure for testing."""
     repo = tmp_path / "sample_repo"
     repo.mkdir()
-    
+
     # Create some source files
     (repo / "main.py").write_text("def hello():\n    print('Hello')\n")
     (repo / "utils.py").write_text("def util():\n    return 42\n")
     (repo / "README.md").write_text("# Sample Repo\n")
     (repo / "requirements.txt").write_text("requests>=2.0\n")
-    
+
     # Create .git directory
     (repo / ".git").mkdir()
     (repo / ".git" / "config").write_text("[core]\n")
-    
+
     return repo
